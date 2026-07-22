@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "basalt": {
+      "type": "http",
+      "url": "https://app.basalt.cofoundy.ai/api/mcp"
+    }
+  }
+}
