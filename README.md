@@ -1,5 +1,7 @@
 # Basalt — Claude Code plugin
 
+[![skills.sh](https://skills.sh/b/cofoundy/basalt-plugin)](https://skills.sh/cofoundy/basalt-plugin)
+
 **Connect your AI to [Basalt](https://app.basalt.cofoundy.ai) — the trust layer for
 AI-generated work.** Ask your agent to *publish* or *share* something and it converges
 here: markdown in → a branded, permissioned, versioned page at a URL your colleague can
@@ -15,9 +17,17 @@ This plugin bundles two things in one install:
 
 ## Install
 
+**Claude Code plugin** (bundles the MCP server + the skill + the `/basalt` command):
+
 ```
 /plugin marketplace add cofoundy/basalt-plugin
 /plugin install basalt@basalt
+```
+
+**Or install just the skill** (any of 70+ agents — Claude Code, Codex, Cursor, OpenCode…) via the [open agent-skills ecosystem](https://skills.sh):
+
+```
+npx skills add cofoundy/basalt-plugin
 ```
 
 The first time your agent uses a Basalt tool, a browser login (OAuth) opens — approve
