@@ -6,6 +6,18 @@
     "name": "Cofoundy SAC",
     "url": "https://cofoundy.dev"
   },
-  "homepage": "https://app.basalt.cofoundy.ai",
-  "license": "MIT"
+  "homepage": "https://github.com/cofoundy/basalt-plugin",
+  "repository": "https://github.com/cofoundy/basalt-plugin",
+  "license": "MIT",
+  "keywords": [
+    "basalt",
+    "mcp",
+    "publish-docs",
+    "agent-skills",
+    "claude-code",
+    "documentation",
+    "ai-agents",
+    "share-docs",
+    "markdown"
+  ]
 }
