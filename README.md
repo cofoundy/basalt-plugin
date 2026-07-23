@@ -1,9 +1,20 @@
-# Basalt — publish from your AI agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.png">
+    <img alt="Basalt" src="./assets/logo.png" width="420">
+  </picture>
+</p>
 
-[![license MIT](https://badgen.net/badge/license/MIT/blue)](./LICENSE)
-[![agents 70+](https://badgen.net/badge/agents/70+/black)](https://skills.sh)
-[![install](https://badgen.net/badge/npx%20skills%20add/cofoundy%2Fbasalt-plugin/green)](https://github.com/cofoundy/basalt-plugin)
-<!-- [![skills.sh](https://skills.sh/b/cofoundy/basalt-plugin)](https://skills.sh/cofoundy/basalt-plugin) — uncomment once skills.sh has indexed the repo (post-install telemetry) -->
+<h1 align="center">Basalt — publish from your AI agent</h1>
+
+<p align="center">
+<a href="./LICENSE"><img src="https://badgen.net/badge/license/MIT/blue" alt="license MIT"></a>
+<a href="https://skills.sh"><img src="https://badgen.net/badge/agents/70+/black" alt="agents 70+"></a>
+<a href="https://github.com/cofoundy/basalt-plugin"><img src="https://badgen.net/badge/npx%20skills%20add/cofoundy%2Fbasalt-plugin/green" alt="npx skills add cofoundy/basalt-plugin"></a>
+</p>
+
+<!-- skills.sh badge stays out until the repo is indexed (post-install telemetry) — a 404 badge reads as broken:
+     [![skills.sh](https://skills.sh/b/cofoundy/basalt-plugin)](https://skills.sh/cofoundy/basalt-plugin) -->
 
 **Your AI wrote something good. Now it lives at a URL your colleague can actually
 open.** Tell your agent to *publish* or *share* a doc and it converges on
