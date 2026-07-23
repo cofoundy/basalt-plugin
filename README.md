@@ -28,6 +28,10 @@ gist with no permissions, no history, no review.
 page is governed, versioned, and your colleague can comment on it. *Companies
 remember.*
 
+<p align="center">
+  <img src="./assets/readme/workflow.svg" width="100%" alt="Four steps: you ask your agent to publish; it reads your workspace conventions; publish_doc compiles, versions and applies permissions; you get a live URL to send.">
+</p>
+
 ## What you get
 
 - **A shareable link, not a file.** `publish_doc` returns a live URL — that's the
