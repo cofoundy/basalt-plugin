@@ -57,6 +57,29 @@ for pdir in $plugin_dirs; do
     [[ "$fm_name" == "$name" ]] || { echo "  ✗ skill $name: frontmatter name '$fm_name' != dir '$name'"; fail=1; ok=0; }
     [[ $ok -eq 1 ]] && echo "  ✓ skill $name"
   done
+
+  # hooks: if the plugin ships hooks.json it MUST be valid JSON and every referenced
+  # script MUST exist on disk and be executable (a hook that can't run is a dead hook).
+  hj="$pdir/hooks/hooks.json"
+  if [[ -f "$hj" ]]; then
+    if json_ok "$hj"; then echo "  ✓ hooks.json (valid JSON)"; else echo "  ✗ $hj: invalid JSON"; fail=1; fi
+    # Resolve each command's script path (${CLAUDE_PLUGIN_ROOT} → the plugin dir).
+    scripts=$(python3 -c "
+import json, re
+m = json.load(open('$hj'))
+for ev in m.get('hooks', {}).values():
+    for grp in ev:
+        for h in grp.get('hooks', []):
+            cmd = h.get('command', '')
+            mt = re.search(r'\\\${CLAUDE_PLUGIN_ROOT}(\S+)', cmd)
+            if mt: print(mt.group(1))
+" 2>/dev/null)
+    for rel in $scripts; do
+      sp="$pdir$rel"
+      if [[ -f "$sp" && -x "$sp" ]]; then echo "  ✓ hook script $rel (exists, executable)";
+      else echo "  ✗ hook script $rel missing or not executable ($sp)"; fail=1; fi
+    done
+  fi
 done
 
 [[ $fail -eq 0 ]] && echo "✓ all valid" || { echo "✗ validation failed"; exit 1; }
