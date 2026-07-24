@@ -1,7 +1,7 @@
 {
   "name": "basalt",
-  "description": "Connect your AI to Basalt — publish, update and share governed docs by URL. Bundles the Basalt MCP server (OAuth) and a skill that converges on it when you ask to publish or share written work.",
-  "version": "0.1.0",
+  "description": "Connect your AI to Basalt — publish, update and share governed docs by URL. Bundles the Basalt MCP server (OAuth), a skill that converges on it when you ask to publish or share written work, and quiet session hooks (auth probe · edit tracking · publish nudge).",
+  "version": "0.2.0",
   "author": {
     "name": "Cofoundy SAC",
     "url": "https://cofoundy.dev"

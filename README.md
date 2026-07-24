@@ -90,11 +90,29 @@ plugins/basalt/
 ├── .claude-plugin/plugin.json   # plugin manifest
 ├── .mcp.json                    # the Basalt MCP server (HTTP + per-user OAuth)
 ├── commands/basalt.md           # the /basalt command
-└── skills/basalt/SKILL.md       # the auto-invoking skill (its description is the magic)
+├── skills/basalt/SKILL.md       # the auto-invoking skill (its description is the magic)
+└── hooks/                       # three session-boundary hooks (silence by default)
 ```
 
 The plugin holds **no secrets** — it points at the public MCP endpoint and auth is
 per-user OAuth. It's a thin, honest on-ramp; the product lives in Basalt.
+
+## Session hooks (quiet unless there's something to do)
+
+Three hooks fire only at session boundaries, and stay **silent by default** — a hook
+that talks when it doesn't need to is just noise:
+
+- **On session start** — if you're not signed in, the agent gets one line so it can
+  offer `basalt login` *before* your first publish fails. Signed in? Nothing.
+- **While you work** — edits to a file under a `vault.yaml` are quietly tracked (no
+  network, no output).
+- **At the end of a turn** — if you edited vault docs but didn't publish, one line
+  asks whether to publish. Set `publish: auto` in that `vault.yaml` and it publishes
+  the changed files for you (diff-aware, once per turn — never on every keystroke).
+
+Per-vault policy lives in `vault.yaml`: `publish: prompt` (default) · `auto` ·
+`manual`. Every hook ships with tests that run against **real captured Claude Code
+payloads** (`hooks/tests/run.sh`) — a silent hook is worthless if it's silently dead.
 
 ## Already have docs in git?
 

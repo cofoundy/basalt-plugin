@@ -9,5 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate plugin (skills + MCP + manifest)
+      - name: Install jq (hook tests parse real JSON payloads)
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Validate plugin (skills + MCP + manifest + hooks)
         run: bash scripts/validate-skills.sh
+      - name: Hook tests (L-009 — real captured payloads, fire/silence/no-loop)
+        run: bash plugins/basalt/hooks/tests/run.sh
