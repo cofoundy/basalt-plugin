@@ -15,16 +15,23 @@ payload="$(cat)"
 file="$(json_get "$payload" "tool_input.file_path")"
 [ -n "$file" ] || exit 0
 
-vault="$(find_vault "$file")"
-[ -n "$vault" ] || exit 0                              # not under a vault → ignore
-
 sid="$(json_get "$payload" "session_id")"
 [ -n "$sid" ] || sid="nosession"
-
 mkdir -p "$(dirty_dir)" 2>/dev/null || exit 0
-df="$(dirty_file "$sid")"
-# dedupe: only append if not already listed
-if ! { [ -f "$df" ] && grep -Fxq "$file" "$df"; }; then
-  printf '%s\n' "$file" >> "$df"
+
+# append_once <listfile> <line>
+append_once() {
+  { [ -f "$1" ] && grep -Fxq "$2" "$1"; } || printf '%s\n' "$2" >> "$1"
+}
+
+vault="$(find_vault "$file")"
+if [ -n "$vault" ]; then
+  append_once "$(dirty_file "$sid")" "$file"           # under a vault → publishable
+elif is_doc "$file"; then
+  # A doc with no vault above it. Not an error yet — but a publish from here would land
+  # in the wrong space silently, so record the REPO ROOT (not the file): the fix is one
+  # `vault.yaml` per tree, and Stop should say it once, not once per file.
+  root="$(cd "$(dirname "$file")" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$root" ] && append_once "$(orphan_file "$sid")" "$root"
 fi
 exit 0
