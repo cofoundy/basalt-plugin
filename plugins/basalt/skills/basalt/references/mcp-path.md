@@ -22,9 +22,12 @@ Nothing on disk to sync, so you are authoring. The tools you need are few:
 2. **`get_space` — read the map before you write into it.** The tree tells you where this
    doc belongs; the link graph tells you what should point at it.
 3. Look before you write — `list_docs` / `read_doc` on a couple of existing docs.
-4. Author the doc: a single `# H1` title, short sections. For data-shaped content (KPIs,
-   callouts, diagrams) use Basalt's MDX components rather than raw HTML — the tool's own
-   guidance (`instructions` + `basalt://` resources) spells out what is available.
+4. Author the doc: a single `# H1` title, short sections. **If it carries data, read
+   `basalt://reference/components` first and pick by content shape** — `<KPIBoard>` for
+   metrics, `<DonutChart>` for proportions, `<BuildProgress>` for sequential status,
+   `<MetadataCard>` for a header chip row, a ```mermaid fence for topology. Markdown
+   tables are the fallback, not the default. Components also re-skin to the tenant's
+   brand; hand-styled markup does not.
 5. **Link it into the graph.** A doc nothing points at is a page with a URL in a pit: it
    will not be found by the next reader, human or agent. Add the edge from the space's
    landing doc or from the nearest doc that already hangs off it.

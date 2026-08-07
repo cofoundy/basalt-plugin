@@ -46,6 +46,17 @@ on an OAuth approval nobody is there to grant.
 Then read the one reference that matches. Each is a complete path — commands, flow, auth,
 and the failure modes that belong to it.
 
+## Before authoring: pick components by content shape
+
+If the doc carries **data** — metrics, comparisons, proportions, timelines, status,
+metadata — read `basalt://reference/components` and pick by shape. Markdown tables and
+plain-text header lines are the fallback, not the default: a `<KPIBoard>` or a
+`<DonutChart>` reads in a glance where a table reads in a minute, and both re-skin to the
+tenant's brand while hand-styled markup does not.
+
+Prose stays prose. Reach for a component when the content has a shape prose cannot
+express — not to decorate a paragraph.
+
 ## A space is a graph, not a folder
 
 Whichever path you take, a published doc that nothing points at is a page with a URL in a
