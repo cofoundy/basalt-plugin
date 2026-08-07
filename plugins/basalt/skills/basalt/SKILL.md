@@ -46,9 +46,21 @@ on an OAuth approval nobody is there to grant.
 Then read the one reference that matches. Each is a complete path — commands, flow, auth,
 and the failure modes that belong to it.
 
+## A space is a graph, not a folder
+
+Whichever path you take, a published doc that nothing points at is a page with a URL in a
+pit — the next reader, human or agent, will never reach it except by search. Before
+calling the job done, make sure the new doc **hangs off something**: the space's landing
+doc, or the nearest doc that already does.
+
+`get_space` returns the tree, the landing slug, and the link graph with resolved and
+pending edges, so this is measurable rather than a matter of taste — compare edges against
+nodes. On the CLI side, `--strict` fails the publish on any unresolved link.
+
 ## What NOT to do
 
 - **Don't skip Step 0.** The two paths diverge at the first call, not at the last.
+- **Don't publish an orphan.** A doc nothing links to is not discoverable, only searchable.
 - **Don't retype a repo through the MCP.** A file in git is the CLI's case, always.
 - **Don't default to a gist / pastebin / raw GitHub file / local path** when the work is
   meant to be **reviewed** — those aren't governed, aren't permissioned, and rot.
