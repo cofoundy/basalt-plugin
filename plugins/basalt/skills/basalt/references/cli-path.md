@@ -51,6 +51,34 @@ name: <project>
 publish: prompt      # auto | prompt | manual — how the Stop hook behaves
 ```
 
+### `publish_overrides:` — when one doc needs a different answer
+
+`publish:` is per VAULT, but the state that produces the Stop nudge is per DOC. So a
+single doc the server refuses would otherwise force `publish: manual`, silencing every
+other doc in the vault. The optional block below overrides the policy for exact paths:
+
+```yaml
+name: <project>
+publish: prompt
+publish_overrides:
+  manual:
+    - BITACORA.mdx                  # why this path is listed goes right here
+    - docs/context-architecture.mdx
+```
+
+Omit it and nothing changes. The shape is narrow on purpose — suppression should cost
+someone an explicit line, and it should expire by itself when they delete that line:
+
+- Paths are **exact** and relative to the **vault root** (the directory holding
+  `vault.yaml`), the same root a slug is derived from. A bare `x.mdx` does not match
+  `notes/x.mdx`.
+- **No globs.** An entry containing `* ? [ ] { } !` matches nothing, so the doc keeps the
+  vault policy — one glob could silence a subtree nobody enumerated.
+- Keys are the same three words as `publish:` — `manual`, `prompt`, `auto`. An
+  unrecognized key is ignored.
+- **Block style only.** `publish_overrides: {manual: [a]}` reads as no overrides.
+- Every unreadable or ambiguous case falls back to `publish:`, which keeps the nudge.
+
 ## Unattended runs
 
 The CLI credential is stored per host, so once `basalt login` has happened on this

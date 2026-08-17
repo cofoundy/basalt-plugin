@@ -98,6 +98,115 @@ vault_policy() {
 }
 
 # =====================================================================================
+# publish_overrides — a per-PATH policy that overrides the vault's (#10)
+# =====================================================================================
+# The publish policy is per VAULT; the state that produces the nag is per DOC. So when one
+# doc cannot publish — because the server REJECTS it, not because nobody tried — the only
+# lever was `publish: manual`, which silences every other doc in the vault too. What is
+# left is a nag that fires every session with no action available, which trains the reader
+# to ignore the channel. The orphan bucket already decided this case ("clear either way →
+# no re-nag"); this is the missing other half.
+#
+#   name: atelier
+#   publish: prompt
+#   publish_overrides:
+#     manual:
+#       - BITACORA.mdx                  # why this path is listed goes right here
+#       - docs/context-architecture.mdx
+#
+# Absent ⇒ today's behavior, byte for byte. Two properties are the whole point: it is
+# EXPLICIT (someone had to type the path, and by convention the reason beside it) and it
+# EXPIRES BY ITSELF (delete the line when the block lifts). No implicit suppression, ever.
+#
+# The shape is deliberately narrow, and every narrowing fails toward KEEPING THE NAG:
+#
+#   - Paths are EXACT and relative to the VAULT ROOT — the directory holding vault.yaml,
+#     which is the same root the CLI walks up to when it derives a slug. One rule in both
+#     places or they drift.
+#   - NO GLOBS. An entry containing any of `* ? [ ] { } !` never matches, so the doc keeps
+#     its vault policy. The guardrail IS that suppression costs someone an explicit line;
+#     a glob lets one line silence a subtree nobody enumerated. Same bounded-shapes-or-
+#     refuse stance `_bp_path_match()` takes below.
+#   - All three policy words are accepted as keys (`manual`, `prompt`, `auto`), because
+#     vault.yaml's vocabulary is three words and a key that means three things in one
+#     place and one thing in another is a divergence waiting to happen. An unrecognized
+#     key is IGNORED — its docs keep the vault policy, which fails toward nagging.
+#   - BLOCK STYLE ONLY. `publish_overrides: {manual: [a]}` is not parsed; it reads as NO
+#     overrides, so every doc keeps its vault policy and the hook keeps nagging.
+#   - A vault.yaml that cannot be read, a doc outside the vault root, an empty block, a
+#     capitalised key — all DELEGATE to vault_policy(), i.e. behave exactly as they did
+#     before this existed.
+#
+# ⚠️ `auto` is accepted, so a listed path CAN newly reach stop.sh's auto bucket, which
+# shells out to `basalt publish` — a real network write. Nothing about that bucket changes
+# here; only WHICH files can reach it, and only when someone wrote the path explicitly.
+
+# doc_policy <vault.yaml-path> <abs-doc-path>  ->  auto | prompt | manual
+#   An override that names THIS doc wins (first matching entry, top to bottom); everything
+#   else DELEGATES to vault_policy(). Non-regression is structural that way, not a
+#   property we have to keep testing for.
+doc_policy() {
+  local v="$1" doc="$2" root rel line t val lead key="" entry hit="" in_block=1
+  [ -f "$v" ] || { vault_policy "$v"; return 0; }
+  root="$(dirname "$v")"
+  case "$root" in
+    /) rel="${doc#/}" ;;
+    *) case "$doc" in
+         "$root"/*) rel="${doc#"$root"/}" ;;
+         *) vault_policy "$v"; return 0 ;;               # not under this root → no override
+       esac ;;
+  esac
+  [ -n "$rel" ] || { vault_policy "$v"; return 0; }
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_block" -ne 0 ]; then
+      # Only a COLUMN-0 `publish_overrides:` with an empty value opens the block. A value
+      # on the same line is flow style (or a scalar) → not parsed → no overrides at all.
+      case "$line" in
+        publish_overrides:*)
+          val="$(_bp_trim "${line#publish_overrides:}")"
+          case "$val" in ''|'#'*) in_block=0; key="" ;; esac ;;
+      esac
+      continue
+    fi
+
+    t="$(_bp_trim "$line")"
+    [ -n "$t" ] || continue                              # blank lines do not end the block
+    lead="${line%%[![:space:]]*}"
+    [ "${#lead}" -gt 0 ] || break                        # indentation back to column 0 → over
+
+    case "$t" in
+      -*)
+        [ -n "$key" ] || continue                        # entries under an ignored key
+        entry="$(_bp_trim "${t#-}")"
+        entry="$(_bp_strip_comment "$entry")"            # `- a.mdx  # the reason`
+        entry="$(_bp_unquote "$(_bp_trim "$entry")")"
+        entry="${entry#./}"
+        [ -n "$entry" ] || continue
+        case "$entry" in *'*'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*|*'!'*) continue ;; esac
+        [ "$entry" = "$rel" ] && { hit="$key"; break; } ;;
+      *:*)
+        # `manual:` / `prompt:` / `auto:` open a list. Anything else — including a
+        # capitalised or misspelled word, and any key carrying a same-line value — leaves
+        # `key` empty, so its entries are skipped and those docs keep the vault policy.
+        val="$(_bp_trim "${t#*:}")"
+        entry="$(_bp_trim "${t%%:*}")"
+        key=""
+        case "$val" in
+          ''|'#'*) case "$entry" in manual|prompt|auto) key="$entry" ;; esac ;;
+        esac ;;
+      *) key="" ;;
+    esac
+  done < "$v"
+
+  case "$hit" in
+    auto|prompt|manual) printf '%s' "$hit" ;;
+    *) vault_policy "$v" ;;
+  esac
+  return 0
+}
+
+# =====================================================================================
 # A2 — the dirty list is an APPEND-ONLY JOURNAL, not a read-modify-write
 # =====================================================================================
 # Two writers, both O_APPEND only:
@@ -194,6 +303,30 @@ _bp_unquote() {
     '"'*'"') s="${s#\"}"; s="${s%\"}" ;;
   esac
   printf '%s' "$s"
+}
+
+# _bp_strip_comment <scalar> -> the scalar with a trailing YAML `# comment` removed.
+# A comment starts at a `#` that OPENS the text or follows whitespace, so `a#b.md` stays a
+# filename while `a.md # why` loses its tail. Used by doc_policy() for the reason someone
+# writes next to an override entry — the convention that makes the block self-documenting.
+# (A `#` inside a quoted scalar is cut too: that entry then matches nothing, which is the
+# safe direction — it keeps the nag.)
+_bp_strip_comment() {
+  local s="$1" kept="" rest="$1" pre last
+  while :; do
+    case "$rest" in *'#'*) ;; *) break ;; esac
+    pre="${rest%%'#'*}"
+    if [ -n "$pre" ]; then last="${pre#"${pre%?}"}"      # char right before this `#`
+    elif [ -n "$kept" ]; then last='#'                   # `##` — not a comment opener
+    else last=' '                                        # `#` opens the whole scalar
+    fi
+    case "$last" in
+      [[:space:]]) printf '%s' "$kept$pre"; return 0 ;;
+    esac
+    kept="$kept$pre#"
+    rest="${rest#*'#'}"
+  done
+  printf '%s' "$kept$rest"
 }
 
 # _bp_path_match <github-paths-pattern> <repo-relative-path>
