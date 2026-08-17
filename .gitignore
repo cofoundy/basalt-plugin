@@ -3,3 +3,7 @@ node_modules/
 *.log
 .agents/
 .claude/skills/
+# Agent working substrate: kickoff prompts, task specs, run state. Local-only by
+# design — this repo is public, and that substrate carries machine paths and
+# internal tooling detail that must never land in a published diff.
+.cofoundy/
