@@ -42,7 +42,8 @@ of="$(orphan_file "$sid")"
 
 # 2) REPLAY the append-only journal into the live set — vault docs edited since their
 #    last publish (A2) — then drop the ones the repo's own Action will publish
-#    (Mechanism B, the #4 case), then bucket what remains by vault policy.
+#    (Mechanism B, the #4 case), then bucket what remains by each DOC's policy — the
+#    vault's `publish:`, unless a `publish_overrides:` entry names that exact path (#10).
 #
 #    The list's real lifetime is one TURN, not one session: this clears it below on
 #    every Stop that reads it. The exception is the loop-guard Stop above, which returns
@@ -53,7 +54,7 @@ if [ -f "$df" ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     published_by_repo_action "$f" && continue          # Mechanism B → already publishing
-    case "$(vault_policy "$(find_vault "$f")")" in
+    case "$(doc_policy "$(find_vault "$f")" "$f")" in
       auto)   auto_files+=("$f") ;;
       manual) : ;;                                     # explicitly silent
       *)      prompt_n=$((prompt_n + 1)) ;;            # prompt (default)

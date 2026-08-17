@@ -780,6 +780,174 @@ printf '%s' "$out" | jq -e '.reason|test("1 vault doc")' >/dev/null 2>&1 \
   && ok "(d) A7 variant: an entry preserved ACROSS the guard is still cleared by its tombstone" \
   || no "(d) A7 variant: expected exactly 1, got: ${out:-<silence>}"
 
+echo "── stop.sh — publish_overrides (#10, the per-PATH hole) ─────"
+# The publish policy is per VAULT; the state that produces the nag is per DOC. For a doc
+# the server REJECTS, the only lever was `publish: manual` — which silences every other
+# doc in the vault too, leaving a nag that fires every session with nothing to do about it.
+#
+# So every arm here is a PAIR: the listed path that goes silent, and a path in the SAME
+# session that must still nag. An implementation that silences both has deleted the
+# feature rather than repaired it, and an implementation that silences neither has shipped
+# a no-op; only the pair can tell those apart from a green run.
+
+# mk_ovault <dir> <publish-policy> <overrides-block>  -> prints the vault dir
+# Deliberately NOT a git repo: Mechanism B must not get to answer a question these arms
+# are asking.
+mk_ovault() {
+  local d="$1" pol="$2" ov="$3"
+  mkdir -p "$d/docs" "$d/notes"
+  { printf 'name: ov\npublish: %s\n' "$pol"; [ -n "$ov" ] && printf '%s' "$ov"; } > "$d/vault.yaml"
+  printf 'x\n' > "$d/BITACORA.mdx"; printf 'x\n' > "$d/README.mdx"
+  printf 'x\n' > "$d/docs/context.mdx"; printf 'x\n' > "$d/notes/x.mdx"
+  printf '%s' "$d"
+}
+stop_out_pub() { PATH="$PATH_WITH_STUB" BASALT_STUB_MODE=publish-ok run "$(cat "$FIX/stop-inactive.json")" "$HOOKS/stop.sh"; }
+expect_nag_n() {   # expect_nag_n <label> <n> — the COUNT is the whole assertion here
+  local o; o="$(stop_out)"
+  printf '%s' "$o" | jq -e --arg n "$2" '.decision=="block" and (.reason|test("Basalt: "+$n+" vault doc"))' >/dev/null 2>&1 \
+    && ok "$1" || no "$1 — expected a NAG for exactly $2, got: ${o:-<silence>}"
+}
+
+OV_MANUAL='publish_overrides:
+  manual:
+    - BITACORA.mdx                 # the server rejects it; delete this line when that lifts
+'
+OV_A="$(mk_ovault "$WORK/ov-a" prompt "$OV_MANUAL")"
+
+seed_stop "$OV_A/BITACORA.mdx"
+expect_silent "#10 (a) prompt vault, publish_overrides.manual lists BITACORA.mdx → SILENT"
+
+seed_stop "$OV_A/BITACORA.mdx" "$OV_A/README.mdx"
+expect_nag_n "#10 (b) PAIR OF (a) — the one that matters: +1 UNLISTED doc → nags for EXACTLY 1 (0 = the vault got silenced, 2 = the override did nothing)" 1
+
+OV_C="$(mk_ovault "$WORK/ov-c" prompt "")"
+seed_stop "$OV_C/BITACORA.mdx"
+expect_nag_n "#10 (c) PAIR OF (a) — the same path with the override line REMOVED, nothing else changed → nags again" 1
+
+# (d) no publish_overrides key at all ⇒ today's behavior, byte for byte, all three policies.
+OV_DP="$(mk_ovault "$WORK/ov-d-prompt" prompt "")"
+seed_stop "$OV_DP/docs/context.mdx"
+expect_nag_n "#10 (d) no publish_overrides + publish: prompt → nags, exactly as today" 1
+
+OV_DM="$(mk_ovault "$WORK/ov-d-manual" manual "")"
+seed_stop "$OV_DM/docs/context.mdx"
+expect_silent "#10 (d) no publish_overrides + publish: manual → silent, exactly as today"
+
+OV_DA="$(mk_ovault "$WORK/ov-d-auto" auto "")"; : > "$BASALT_STUB_CALLS"
+seed_stop "$OV_DA/docs/context.mdx"
+out="$(stop_out_pub)"
+{ printf '%s' "$out" | grep -qi 'auto-published' && grep -Fxq "$OV_DA/docs/context.mdx" "$BASALT_STUB_CALLS"; } \
+  && ok "#10 (d) no publish_overrides + publish: auto → publishes, exactly as today" \
+  || no "#10 (d) auto without overrides regressed (out:$out calls:$(cat "$BASALT_STUB_CALLS"))"
+
+# (e) `auto` is an accepted key, so a listed path can newly REACH the bucket that shells
+# out to `basalt publish` — a real network write. Its twin proves the reach is confined to
+# the path someone actually typed.
+OV_AUTOKEY='publish_overrides:
+  auto:
+    - docs/context.mdx             # safe to ship unattended
+'
+OV_E="$(mk_ovault "$WORK/ov-e" prompt "$OV_AUTOKEY")"; : > "$BASALT_STUB_CALLS"
+seed_stop "$OV_E/docs/context.mdx"
+out="$(stop_out_pub)"
+{ printf '%s' "$out" | grep -qi 'auto-published' && grep -Fxq "$OV_E/docs/context.mdx" "$BASALT_STUB_CALLS"; } \
+  && ok "#10 (e) publish_overrides.auto in a PROMPT vault → that path reaches the auto bucket" \
+  || no "#10 (e) expected an auto publish (out:$out calls:$(cat "$BASALT_STUB_CALLS"))"
+
+: > "$BASALT_STUB_CALLS"
+seed_stop "$OV_E/README.mdx"
+out="$(stop_out_pub)"
+{ printf '%s' "$out" | jq -e '.reason|test("Basalt: 1 vault doc")' >/dev/null 2>&1 && [ ! -s "$BASALT_STUB_CALLS" ]; } \
+  && ok "#10 (e) PAIR: an UNLISTED path in that same vault stays prompt — never auto-published" \
+  || no "#10 (e) PAIR: unlisted path was auto-published or did not nag (out:$out calls:$(cat "$BASALT_STUB_CALLS"))"
+
+# (f) Robustness. Each unsupported shape is paired with a well-formed entry in the SAME
+# vault, so "exactly 1" separates "the shape was refused" from "the whole block died".
+OV_GLOB='publish_overrides:
+  manual:
+    - '"'"'*.mdx'"'"'                     # a glob: UNSUPPORTED on purpose, matches nothing
+    - README.mdx
+'
+OV_F1="$(mk_ovault "$WORK/ov-f-glob" prompt "$OV_GLOB")"
+seed_stop "$OV_F1/BITACORA.mdx" "$OV_F1/README.mdx"
+expect_nag_n "#10 (f) a glob entry silences NOTHING while the literal beside it works → exactly 1 (0 would mean one line silenced a subtree nobody enumerated)" 1
+
+OV_BADKEY='publish_overrides:
+  silent:
+    - BITACORA.mdx
+  manual:
+    - README.mdx
+'
+OV_F2="$(mk_ovault "$WORK/ov-f-badkey" prompt "$OV_BADKEY")"
+seed_stop "$OV_F2/BITACORA.mdx" "$OV_F2/README.mdx"
+expect_nag_n "#10 (f) an unrecognized key is IGNORED (its doc keeps the vault policy) while a real key beside it works → exactly 1" 1
+
+# …and the same key one level DEEPER, under that unrecognized key. Ignoring a key has to
+# ignore its subtree, or "unrecognized" silences after all — the one direction refused here.
+OV_NESTED='publish_overrides:
+  weird:
+    manual:
+      - BITACORA.mdx
+  manual:
+    - README.mdx
+'
+OV_F2B="$(mk_ovault "$WORK/ov-f-nested" prompt "$OV_NESTED")"
+seed_stop "$OV_F2B/BITACORA.mdx" "$OV_F2B/README.mdx"
+expect_nag_n "#10 (f) PAIR: a real key NESTED under an unrecognized one silences nothing, the top-level one still works → exactly 1" 1
+
+OV_FLOW='publish_overrides: {manual: [BITACORA.mdx, README.mdx]}
+'
+OV_F3="$(mk_ovault "$WORK/ov-f-flow" prompt "$OV_FLOW")"
+seed_stop "$OV_F3/BITACORA.mdx" "$OV_F3/README.mdx"
+expect_nag_n "#10 (f) PAIR OF (a): flow style is not parsed → BOTH keep the vault policy and nag" 2
+
+# The suffix-matching trap post-publish.sh documents at length, in its two forms.
+OV_SUFFIX='publish_overrides:
+  manual:
+    - notes/x.mdx
+'
+OV_F4A="$(mk_ovault "$WORK/ov-f-vault-a" prompt "$OV_SUFFIX")"
+OV_F4B="$(mk_ovault "$WORK/ov-f-vault-b" prompt "")"
+seed_stop "$OV_F4A/notes/x.mdx"
+expect_silent "#10 (f) notes/x.mdx listed in ITS OWN vault → silent"
+seed_stop "$OV_F4B/notes/x.mdx"
+expect_nag_n "#10 (f) PAIR: the identically-named doc in a DIFFERENT vault → nags (paths resolve against THEIR vault root)" 1
+
+OV_BASENAME='publish_overrides:
+  manual:
+    - x.mdx
+    - notes/x.mdx
+'
+OV_F5="$(mk_ovault "$WORK/ov-f-basename" prompt "$OV_BASENAME")"
+seed_stop "$OV_F5/notes/x.mdx"
+expect_silent "#10 (f) the vault-root-relative entry notes/x.mdx matches → silent"
+OV_F5B="$(mk_ovault "$WORK/ov-f-basename-only" prompt 'publish_overrides:
+  manual:
+    - x.mdx
+')"
+seed_stop "$OV_F5B/notes/x.mdx"
+expect_nag_n "#10 (f) PAIR: the bare basename x.mdx does NOT match notes/x.mdx → nags (exact, never a suffix)" 1
+
+OV_DOTSLASH='publish_overrides:
+  manual:
+    - ./docs/context.mdx           # a leading ./ normalizes away
+'
+OV_F6="$(mk_ovault "$WORK/ov-f-dotslash" prompt "$OV_DOTSLASH")"
+seed_stop "$OV_F6/docs/context.mdx" "$OV_F6/README.mdx"
+expect_nag_n "#10 (f) ./docs/context.mdx normalizes and silences it, the unlisted doc still nags → exactly 1" 1
+
+# The block ends where the indentation returns to column 0 — a list under the NEXT
+# top-level key must not be read as more overrides.
+OV_TERM='publish_overrides:
+  manual:
+    - BITACORA.mdx
+tags:
+  - README.mdx
+'
+OV_F7="$(mk_ovault "$WORK/ov-f-terminate" prompt "$OV_TERM")"
+seed_stop "$OV_F7/BITACORA.mdx" "$OV_F7/README.mdx"
+expect_nag_n "#10 (f) the block ends at column 0 → a list under the NEXT key silences nothing, exactly 1" 1
+
 echo "─────────────────────────────────────────────────────────────"
 printf 'pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

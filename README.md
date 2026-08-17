@@ -111,8 +111,11 @@ that talks when it doesn't need to is just noise:
   the changed files for you (diff-aware, once per turn — never on every keystroke).
 
 Per-vault policy lives in `vault.yaml`: `publish: prompt` (default) · `auto` ·
-`manual`. Every hook ships with tests that run against **real captured Claude Code
-payloads** (`hooks/tests/run.sh`) — a silent hook is worthless if it's silently dead.
+`manual`. When one doc needs a different answer than its vault — the server refuses
+it, say — an optional `publish_overrides:` block gives that exact path its own policy,
+so you don't have to silence the whole vault to quiet one file. Every hook ships with
+tests that run against **real captured Claude Code payloads** (`hooks/tests/run.sh`) —
+a silent hook is worthless if it's silently dead.
 
 ## Already have docs in git?
 
