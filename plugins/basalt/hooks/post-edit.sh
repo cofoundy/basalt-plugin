@@ -19,14 +19,27 @@ sid="$(json_get "$payload" "session_id")"
 [ -n "$sid" ] || sid="nosession"
 mkdir -p "$(dirty_dir)" 2>/dev/null || exit 0
 
-# append_once <listfile> <line>
+# append_once <listfile> <line> — dedup against HISTORY. Correct for the orphan list,
+# WRONG for the dirty journal. See B1 below.
 append_once() {
   { [ -f "$1" ] && grep -Fxq "$2" "$1"; } || printf '%s\n' "$2" >> "$1"
 }
 
 vault="$(find_vault "$file")"
 if [ -n "$vault" ]; then
-  append_once "$(dirty_file "$sid")" "$file"           # under a vault → publishable
+  # B1 — the dirty append is UNCONDITIONAL, and this is the one blocking defect if it is
+  # not. The dirty list is an append-only journal (A2) that also carries `-<path>`
+  # publish tombstones, so its history keeps a tombstoned path forever:
+  #
+  #   journal:  p ; -p        →  grep -Fxq "p" MATCHES line 1  →  the re-edit is SKIPPED
+  #   replay:   p → live={p}  ;  -p → live={}                  →  Stop goes SILENT
+  #
+  # That is acceptance arm (c)'s second half — "then edit it again ⇒ it nags again" —
+  # failing toward silence. `append_once` stays ONLY on the orphan list below, where the
+  # dedup is semantically required (the fix is one vault, not one per file). Dedup for
+  # the dirty list now happens at REPLAY, where the whole ordering is visible.
+  # This also REMOVES a per-edit `grep`. Zero network / zero output are untouched.
+  printf '%s\n' "$file" >> "$(dirty_file "$sid")"      # under a vault → publishable
 elif is_doc "$file"; then
   # A doc with no vault above it. Not an error yet — but a publish from here would land
   # in the wrong space silently, so record the REPO ROOT (not the file): the fix is one

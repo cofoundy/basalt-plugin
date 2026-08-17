@@ -5,7 +5,7 @@
 # only invoke the user's own `basalt` CLI with the user's own credentials.
 #
 # Payload shapes are the REAL ones captured 2026-07-24 (see hooks/tests/fixtures/ and
-# cofoundy-toolkit/docs/claude-code-capabilities.md). Load-bearing facts baked in here:
+# the plugin capability notes). Load-bearing facts baked in here:
 #   - PostToolUse `tool_input.file_path` is an ABSOLUTE path (Write + Edit).
 #   - Every event in a run shares one `session_id` (subagent tool calls included) —
 #     so the dirty-list keyed by session_id captures subagent edits too.
@@ -95,4 +95,356 @@ vault_policy() {
     auto|prompt|manual) printf '%s' "$p" ;;
     *) printf 'prompt' ;;
   esac
+}
+
+# =====================================================================================
+# A2 — the dirty list is an APPEND-ONLY JOURNAL, not a read-modify-write
+# =====================================================================================
+# Two writers, both O_APPEND only:
+#
+#   Edit|Write → post-edit.sh    APPENDS a bare ABSOLUTE path      ("this doc was edited")
+#   Bash       → post-publish.sh APPENDS a "-<operand>" tombstone   ("this doc published")
+#   Stop       → stop.sh         REPLAYS the journal top-to-bottom  → the LIVE set
+#
+# `-` is unambiguous as a tombstone marker because a dirty entry is always an absolute
+# path and starts with `/`.
+#
+# Why a journal and not a rewrite: subagent edits fire post-edit.sh under the PARENT's
+# session id, so two appends can race. Under mktemp+mv one of them is LOST, and the
+# direction of a lost update is SILENCE — the hook stops nagging for a doc nobody
+# published. Appending removes the race by construction (no lock: `flock` is absent on
+# macOS). It also makes ordering correct for free: `Write → publish → Edit → publish`
+# lands right at every point, because each event is applied WHEN IT HAPPENED. A
+# subtract-at-Stop design gets that sequence wrong.
+#
+# Tombstone matching, applied at replay where the whole ordering is visible:
+#   "-/abs/path"   → EXACT match. post-publish.sh already resolved the operand against a
+#                    base it could see (a `cd` in the command, else the payload's cwd).
+#                    No exact match ⇒ drop NOTHING — there is no suffix fallback here,
+#                    because suffix matching across two vaults sharing a basename is
+#                    confident of the WRONG answer.
+#   "-rel/path"    → the base was UNRESOLVABLE. Match by path SUFFIX, and only when
+#                    exactly one live entry matches; 2+ candidates drop none. Ambiguity
+#                    always resolves toward nagging, never toward silence.
+#
+# replay_journal <journal-file> -> prints the live set, one absolute path per line.
+replay_journal() {
+  local f="$1" line rest i n hit hits
+  local -a live=()
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      -*)
+        rest="${line#-}"
+        [ -n "$rest" ] || continue
+        hit=-1; hits=0; n=${#live[@]}
+        for ((i = 0; i < n; i++)); do
+          [ -n "${live[i]}" ] || continue
+          case "$rest" in
+            /*) [ "${live[i]}" = "$rest" ] && { hit=$i; hits=$((hits + 1)); } ;;
+            *)  case "${live[i]}" in */"$rest") hit=$i; hits=$((hits + 1)) ;; esac ;;
+          esac
+        done
+        [ "$hits" -eq 1 ] && live[$hit]=""
+        ;;
+      *)
+        hit=0; n=${#live[@]}
+        for ((i = 0; i < n; i++)); do
+          [ "${live[i]}" = "$line" ] && { hit=1; break; }
+        done
+        [ "$hit" -eq 1 ] || live+=("$line")
+        ;;
+    esac
+  done < "$f"
+  n=${#live[@]}
+  for ((i = 0; i < n; i++)); do
+    [ -n "${live[i]}" ] && printf '%s\n' "${live[i]}"
+  done
+  return 0
+}
+
+# =====================================================================================
+# Mechanism B — is this doc already on its way to publication via the repo's Action?
+# =====================================================================================
+# The #4 case: the mandated flow for a repo-backed vault is commit + push → the repo's
+# GitHub Action publishes. Nothing local ever clears the dirty list, so the nag is
+# UNCONDITIONAL. Everything below is local (string ops + `git` plumbing): zero network,
+# zero added `basalt` invocations.
+#
+# WHAT THIS CLAIMS, EXACTLY: not a prediction of what the Action publishes, only
+# *positive local evidence that a push of this file, on this branch, STARTS a Basalt
+# publish workflow*. Everything downstream of the trigger (run-step filters, `if:`
+# conditions, a workflow that starts and then fails) is declared invisible.
+#
+# EVERY failure and every ambiguity below resolves toward KEEPING THE NAG.
+
+# --- small string helpers (no regex: ugrep and GNU grep disagree on `[^\n]`, recon F6) --
+_bp_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+_bp_unquote() {
+  local s="$1"
+  case "$s" in
+    "'"*"'") s="${s#\'}"; s="${s%\'}" ;;
+    '"'*'"') s="${s#\"}"; s="${s%\"}" ;;
+  esac
+  printf '%s' "$s"
+}
+
+# _bp_path_match <github-paths-pattern> <repo-relative-path>
+#   0 = matches · 1 = does not match · 2 = shape not supported (caller keeps the nag)
+#
+# BOUNDED shapes only, as `case` globs: `**.EXT` · `**/*.EXT` · `*.EXT` · `dir/**` ·
+# `dir/**/*.EXT` · literal. Everything else is unsupported ON PURPOSE. `!` negation is
+# the sharpest example: GitHub allows it in `paths:` and it INVERTS the filter, so
+# guessing its direction yields silence on a doc nobody published.
+_bp_path_match() {
+  local p="$1" f="$2" ext dir
+  case "$p" in
+    ''|'!'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*) return 2 ;;
+  esac
+  case "$p" in
+    '**.'*)
+      ext="${p#'**'}"
+      case "$ext" in *'*'*|*'/'*) return 2 ;; esac
+      case "$f" in *"$ext") return 0 ;; *) return 1 ;; esac ;;
+    '**/*.'*)
+      ext="${p#'**/*'}"
+      case "$ext" in *'*'*|*'/'*) return 2 ;; esac
+      case "$f" in *"$ext") return 0 ;; *) return 1 ;; esac ;;
+    '*.'*)
+      ext="${p#'*'}"
+      case "$ext" in *'*'*|*'/'*) return 2 ;; esac
+      case "$f" in */*) return 1 ;; esac          # `*` does not cross a `/`
+      case "$f" in *"$ext") return 0 ;; *) return 1 ;; esac ;;
+    *'/**/*.'*)
+      dir="${p%%'/**/*'*}"; ext="${p##*'/**/*'}"
+      case "$dir" in *'*'*) return 2 ;; esac
+      case "$ext" in *'*'*|*'/'*) return 2 ;; esac
+      case "$f" in "$dir"/*) : ;; *) return 1 ;; esac
+      case "$f" in *"$ext") return 0 ;; *) return 1 ;; esac ;;
+    *'/**')
+      dir="${p%'/**'}"
+      case "$dir" in *'*'*) return 2 ;; esac
+      case "$f" in "$dir"/*) return 0 ;; *) return 1 ;; esac ;;
+    *'*'*) return 2 ;;
+    *) [ "$p" = "$f" ] && return 0 || return 1 ;;
+  esac
+}
+
+# workflow_triggers_publish <workflow-file> <current-branch> <repo-relative-doc-path>
+#   0 when a push of this file on this branch STARTS this workflow. Conditions (5)–(8):
+#     5. it has a `push:` trigger        (a schedule:/release:-only workflow never fires)
+#     6. EVERY `branches:` list contains the current branch   (absent → pass)
+#     7. EVERY `paths:` list matches the repo-relative path   (absent → pass)
+#     8. NO `paths-ignore:` / `branches-ignore:` anywhere     (negation is not modelled)
+#
+# "EVERY list must match" sidesteps YAML nesting entirely — we never need to know which
+# trigger owns which list — and being a conjunction it fails toward nagging.
+workflow_triggers_publish() {
+  local wf="$1" branch="$2" rel="$3"
+  local line t lead rest pre val inner item key
+  local in_on=1 push_seen=1
+  local kind="" list_n=0 list_ok=1
+  local -a parts=()
+
+  [ -f "$wf" ] || return 1
+
+  # (8) — negation is not modelled, in either direction.
+  grep -Fq 'paths-ignore' "$wf" 2>/dev/null && return 1
+  grep -Fq 'branches-ignore' "$wf" 2>/dev/null && return 1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    t="$(_bp_trim "$line")"
+    case "$t" in '#'*) continue ;; esac
+
+    # --- continuation of an open BLOCK sequence (`paths:` / `branches:` on its own line)
+    if [ -n "$kind" ]; then
+      case "$t" in
+        '') continue ;;
+        -*)
+          item="$(_bp_unquote "$(_bp_trim "${t#-}")")"
+          case "$item" in '!'*) return 1 ;; esac
+          if [ "$kind" = branches ]; then
+            [ "$item" = "$branch" ] && list_ok=0
+          else
+            _bp_path_match "$item" "$rel"
+            case $? in 0) list_ok=0 ;; 2) return 1 ;; esac
+          fi
+          list_n=$((list_n + 1))
+          continue ;;
+        *)
+          { [ "$list_n" -gt 0 ] && [ "$list_ok" -eq 0 ]; } || return 1
+          kind=""; list_n=0; list_ok=1 ;;
+      esac
+    fi
+    [ -n "$t" ] || continue
+
+    # --- top-level key tracking: only the `on:` block is trigger configuration ---------
+    lead="${line%%[![:space:]]*}"
+    if [ "${#lead}" -eq 0 ]; then
+      case "$t" in
+        on:*|'"on":'*|"'on':"*) in_on=0 ;;
+        *:*) in_on=1 ;;
+      esac
+    fi
+    [ "$in_on" -eq 0 ] || continue
+
+    # --- (5) a `push:` trigger --------------------------------------------------------
+    case "$t" in
+      push:|push:[[:space:]]*|push:'{'*|*' push:'*|*'{push:'*|*',push:'*) push_seen=0 ;;
+    esac
+    case "$t" in
+      on:*)
+        val="$(_bp_trim "${t#on:}")"
+        case "$val" in
+          ''|'{'*|'#'*) : ;;
+          *) case "$val" in *push*) push_seen=0 ;; esac ;;
+        esac ;;
+    esac
+
+    # --- (6)+(7) every `branches:` / `paths:` list, wherever it sits in the `on:` block -
+    for key in branches: paths:; do
+      rest="$t"
+      while :; do
+        case "$rest" in *"$key"*) ;; *) break ;; esac
+        pre="${rest%%"$key"*}"
+        rest="${rest#*"$key"}"
+        # the key must START a mapping entry: line start, or after `{`, `,` or a space
+        case "$pre" in ''|*' '|*'{'|*',') ;; *) continue ;; esac
+        val="$(_bp_trim "$rest")"
+        case "$val" in
+          '['*)
+            inner="${val#'['}"
+            case "$inner" in *']'*) ;; *) return 1 ;; esac     # multi-line flow: unreadable
+            inner="${inner%%]*}"
+            list_ok=1; list_n=0
+            IFS=',' read -ra parts <<< "$inner"
+            for item in ${parts[@]+"${parts[@]}"}; do
+              item="$(_bp_unquote "$(_bp_trim "$item")")"
+              [ -n "$item" ] || continue
+              case "$item" in '!'*) return 1 ;; esac
+              if [ "${key%:}" = branches ]; then
+                [ "$item" = "$branch" ] && list_ok=0
+              else
+                _bp_path_match "$item" "$rel"
+                case $? in 0) list_ok=0 ;; 2) return 1 ;; esac
+              fi
+              list_n=$((list_n + 1))
+            done
+            { [ "$list_n" -gt 0 ] && [ "$list_ok" -eq 0 ]; } || return 1
+            list_ok=1; list_n=0 ;;
+          ''|'#'*)
+            kind="${key%:}"; list_n=0; list_ok=1 ;;             # block sequence follows
+          '}'*|','*) return 1 ;;                                # empty value: unreadable
+          *)
+            item="${val%%,*}"; item="${item%%\}*}"
+            item="$(_bp_unquote "$(_bp_trim "$item")")"
+            [ -n "$item" ] || return 1
+            case "$item" in '!'*) return 1 ;; esac
+            if [ "${key%:}" = branches ]; then
+              [ "$item" = "$branch" ] || return 1
+            else
+              _bp_path_match "$item" "$rel" || return 1
+            fi ;;
+        esac
+      done
+    done
+  done < "$wf"
+
+  [ -z "$kind" ] || { [ "$list_n" -gt 0 ] && [ "$list_ok" -eq 0 ]; } || return 1
+  [ "$push_seen" -eq 0 ] || return 1
+  return 0
+}
+
+# git_path_committed_and_pushed <repo-root> <path>
+#   0 when <path> is TRACKED, has no uncommitted changes, and the commit that last
+#   touched it is an ancestor of the branch's upstream — i.e. it was PUSHED.
+#
+# THE SUBJECT IS LOAD-BEARING. This same predicate is applied to two different files:
+#   - the DOC      → spec conditions (2) + (3)
+#   - the WORKFLOW → spec condition (0)
+# Read as "the same two git calls" without naming the subject, the next reader points
+# both of them at the doc and reopens the hole the refute-pass found: `basalt onboard`
+# writes an UNTRACKED workflow, the agent pushes only the doc, and every condition
+# passes against a workflow that does not exist on the branch whose push was verified.
+git_path_committed_and_pushed() {
+  local root="$1" path="$2" st commit up
+  git -C "$root" ls-files --error-unmatch -- "$path" >/dev/null 2>&1 || return 1
+  st="$(git -C "$root" status --porcelain -- "$path" 2>/dev/null)" || return 1
+  [ -z "$st" ] || return 1
+  commit="$(git -C "$root" log -1 --format=%H -- "$path" 2>/dev/null)" || return 1
+  [ -n "$commit" ] || return 1
+  up="$(git -C "$root" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" || return 1
+  [ -n "$up" ] || return 1
+  git -C "$root" merge-base --is-ancestor "$commit" "$up" 2>/dev/null || return 1
+  return 0
+}
+
+# --- per-REPO half of the filter, memoised (resolved once per repo root, not per file) --
+# bash 3.2 (macOS) has no associative arrays → two parallel arrays.
+_BP_MEMO_ROOT=(); _BP_MEMO_WF=()
+
+# _bp_compute_candidates <repo-root> -> newline-joined QUALIFIED candidate workflows
+#   (1) the repo declares at least one candidate Basalt publish workflow
+#       (`.github/workflows/*.y*ml` mentioning `basalt`)
+#   (0) that candidate WORKFLOW FILE is itself tracked, clean and pushed
+#   (4) the current branch IS the repo's default branch. Full stop, no disjunct:
+#       `branches: [main]` ships in the canonical template (F7), so a permissive default
+#       here goes quiet on a doc that will never publish, for every user.
+_bp_compute_candidates() {
+  local root="$1" def cur wf out=""
+  def="$(git -C "$root" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || return 0
+  [ -n "$def" ] || return 0
+  def="${def#origin/}"
+  cur="$(git -C "$root" symbolic-ref --short -q HEAD 2>/dev/null)" || return 0
+  [ -n "$cur" ] || return 0                      # detached HEAD → keep the nag
+  [ "$cur" = "$def" ] || return 0                # B3: not the default branch → keep it
+  for wf in "$root"/.github/workflows/*.y*ml; do
+    [ -f "$wf" ] || continue
+    grep -Fq basalt "$wf" 2>/dev/null || continue                 # (1)
+    git_path_committed_and_pushed "$root" "$wf" || continue       # (0) — the WORKFLOW
+    out="$out$wf
+"
+  done
+  printf '%s' "$out"
+}
+
+repo_publish_candidates() {
+  local root="$1" i n out
+  n=${#_BP_MEMO_ROOT[@]}
+  for ((i = 0; i < n; i++)); do
+    if [ "${_BP_MEMO_ROOT[i]}" = "$root" ]; then printf '%s' "${_BP_MEMO_WF[i]}"; return 0; fi
+  done
+  out="$(_bp_compute_candidates "$root")"
+  _BP_MEMO_ROOT+=("$root"); _BP_MEMO_WF+=("$out")
+  printf '%s' "$out"
+}
+
+# published_by_repo_action <abs-doc-path>
+#   0 → drop it from the dirty list (a push of it starts a Basalt publish workflow)
+#   1 → KEEP THE NAG (the default for every failure, every ambiguity, every gap)
+published_by_repo_action() {
+  local file="$1" root rel cands wf cur
+  command -v git >/dev/null 2>&1 || return 1
+  root="$(cd "$(dirname "$file")" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$root" ] || return 1
+  cands="$(repo_publish_candidates "$root")"
+  [ -n "$cands" ] || return 1
+  git_path_committed_and_pushed "$root" "$file" || return 1     # (2)+(3) — the DOC
+  case "$file" in "$root"/*) rel="${file#"$root"/}" ;; *) return 1 ;; esac
+  cur="$(git -C "$root" symbolic-ref --short -q HEAD 2>/dev/null)" || return 1
+  # C2: (5)–(8) are evaluated PER CANDIDATE; ONE qualifying candidate is enough. The
+  # other reading (all must qualify) lets a single workflow_dispatch-only helper kill
+  # Mechanism B repo-wide, silently, with every test green.
+  while IFS= read -r wf; do
+    [ -n "$wf" ] || continue
+    workflow_triggers_publish "$wf" "$cur" "$rel" && return 0
+  done <<< "$cands"
+  return 1
 }

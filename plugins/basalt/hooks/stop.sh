@@ -15,6 +15,15 @@
 #
 # The dirty-list is CLEARED after we speak, so a subsequent turn with no NEW edits stays
 # silent (no per-turn nagging). Batching-at-close, never push-on-edit (IRT NO-GO).
+#
+# THE PROPOSITION THIS USED TO GET WRONG: it asserted "this doc is unpublished" from a
+# measurement of "this doc was edited". Those are different propositions, and two flows
+# sat entirely inside the gap — a repo-backed vault whose Action publishes on push
+# (nothing local ever cleared the list, so the nag was unconditional), and an agent
+# running `basalt publish` mid-turn, which is exactly what the nudge asks for. The list
+# now means: VAULT DOCS EDITED SINCE THEIR LAST PUBLISH.
+#   - publish-tracking  → post-publish.sh writes tombstones; replay_journal() applies them
+#   - the Action case   → published_by_repo_action() (all local: `git` plumbing + globs)
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -31,17 +40,25 @@ df="$(dirty_file "$sid")"
 of="$(orphan_file "$sid")"
 [ -f "$df" ] || [ -f "$of" ] || exit 0                 # nothing tracked → silent
 
-# 2) Bucket the (existing, deduped) dirty files by their nearest vault's policy.
+# 2) REPLAY the append-only journal into the live set — vault docs edited since their
+#    last publish (A2) — then drop the ones the repo's own Action will publish
+#    (Mechanism B, the #4 case), then bucket what remains by vault policy.
+#
+#    The list's real lifetime is one TURN, not one session: this clears it below on
+#    every Stop that reads it. The exception is the loop-guard Stop above, which returns
+#    BEFORE the clear and PRESERVES the list — and that exception is precisely how a
+#    false positive outlives its own turn.
 auto_files=(); prompt_n=0
 if [ -f "$df" ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    published_by_repo_action "$f" && continue          # Mechanism B → already publishing
     case "$(vault_policy "$(find_vault "$f")")" in
       auto)   auto_files+=("$f") ;;
       manual) : ;;                                     # explicitly silent
       *)      prompt_n=$((prompt_n + 1)) ;;            # prompt (default)
     esac
-  done < "$df"
+  done < <(replay_journal "$df")
 fi
 
 # 2b) Orphan bucket: docs edited in a repo with NO vault.yaml. Only speak when the CLI is

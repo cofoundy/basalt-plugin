@@ -1,0 +1,25 @@
+{
+  "session_id": "test-session-0001",
+  "transcript_path": "/tmp/basalt-hook-fixtures/transcript.jsonl",
+  "cwd": "/tmp/basalt-hook-fixtures/proj",
+  "prompt_id": "test-prompt-0001",
+  "permission_mode": "default",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "basalt publish docs/test.md",
+    "description": "Publish the doc"
+  },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_testbash0001",
+  "duration_ms": 33
+}
