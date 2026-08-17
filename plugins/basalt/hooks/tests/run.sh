@@ -882,6 +882,19 @@ OV_F2="$(mk_ovault "$WORK/ov-f-badkey" prompt "$OV_BADKEY")"
 seed_stop "$OV_F2/BITACORA.mdx" "$OV_F2/README.mdx"
 expect_nag_n "#10 (f) an unrecognized key is IGNORED (its doc keeps the vault policy) while a real key beside it works → exactly 1" 1
 
+# …and the same key one level DEEPER, under that unrecognized key. Ignoring a key has to
+# ignore its subtree, or "unrecognized" silences after all — the one direction refused here.
+OV_NESTED='publish_overrides:
+  weird:
+    manual:
+      - BITACORA.mdx
+  manual:
+    - README.mdx
+'
+OV_F2B="$(mk_ovault "$WORK/ov-f-nested" prompt "$OV_NESTED")"
+seed_stop "$OV_F2B/BITACORA.mdx" "$OV_F2B/README.mdx"
+expect_nag_n "#10 (f) PAIR: a real key NESTED under an unrecognized one silences nothing, the top-level one still works → exactly 1" 1
+
 OV_FLOW='publish_overrides: {manual: [BITACORA.mdx, README.mdx]}
 '
 OV_F3="$(mk_ovault "$WORK/ov-f-flow" prompt "$OV_FLOW")"

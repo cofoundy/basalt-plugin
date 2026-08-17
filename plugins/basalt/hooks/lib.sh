@@ -146,7 +146,7 @@ vault_policy() {
 #   else DELEGATES to vault_policy(). Non-regression is structural that way, not a
 #   property we have to keep testing for.
 doc_policy() {
-  local v="$1" doc="$2" root rel line t val lead key="" entry hit="" in_block=1
+  local v="$1" doc="$2" root rel line t val lead key="" entry hit="" in_block=1 kindent=""
   [ -f "$v" ] || { vault_policy "$v"; return 0; }
   root="$(dirname "$v")"
   case "$root" in
@@ -186,15 +186,21 @@ doc_policy() {
         case "$entry" in *'*'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*|*'!'*) continue ;; esac
         [ "$entry" = "$rel" ] && { hit="$key"; break; } ;;
       *:*)
-        # `manual:` / `prompt:` / `auto:` open a list. Anything else — including a
-        # capitalised or misspelled word, and any key carrying a same-line value — leaves
-        # `key` empty, so its entries are skipped and those docs keep the vault policy.
+        # `manual:` / `prompt:` / `auto:` open a list. Anything else — a capitalised or
+        # misspelled word, a key carrying a same-line value, or a key NESTED one level
+        # deeper than the first key in this block (`weird:` then `manual:` under it) —
+        # leaves `key` empty, so its entries are skipped and those docs keep the vault
+        # policy. The nesting check exists because without it an unrecognized key would
+        # not ignore its subtree, and over-accepting here fails toward SILENCE.
+        [ -n "$kindent" ] || kindent="${#lead}"
         val="$(_bp_trim "${t#*:}")"
         entry="$(_bp_trim "${t%%:*}")"
         key=""
-        case "$val" in
-          ''|'#'*) case "$entry" in manual|prompt|auto) key="$entry" ;; esac ;;
-        esac ;;
+        if [ "${#lead}" -eq "$kindent" ]; then
+          case "$val" in
+            ''|'#'*) case "$entry" in manual|prompt|auto) key="$entry" ;; esac ;;
+          esac
+        fi ;;
       *) key="" ;;
     esac
   done < "$v"
