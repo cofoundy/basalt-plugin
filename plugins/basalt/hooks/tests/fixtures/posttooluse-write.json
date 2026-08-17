@@ -1,1 +1,26 @@
-{"session_id":"b2e62d1e-5631-4aac-901d-74d0a68ecd1b","transcript_path":"/home/andre/.claude/projects/-tmp-claude-1000--home-andre-cofoundy-products-basalt-3749c94a-50fe-4a19-9695-7f4104293222-scratchpad-hook-validation-proj/b2e62d1e-5631-4aac-901d-74d0a68ecd1b.jsonl","cwd":"/tmp/claude-1000/-home-andre-cofoundy-products-basalt/3749c94a-50fe-4a19-9695-7f4104293222/scratchpad/hook-validation/proj","prompt_id":"ef699644-d6ab-41f2-a4af-4dcfbfd270c1","permission_mode":"bypassPermissions","effort":{"level":"xhigh"},"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"/tmp/claude-1000/-home-andre-cofoundy-products-basalt/3749c94a-50fe-4a19-9695-7f4104293222/scratchpad/hook-validation/proj/docs/test.md","content":"hello"},"tool_response":{"type":"create","filePath":"/tmp/claude-1000/-home-andre-cofoundy-products-basalt/3749c94a-50fe-4a19-9695-7f4104293222/scratchpad/hook-validation/proj/docs/test.md","content":"hello","structuredPatch":[],"originalFile":null,"userModified":false},"tool_use_id":"toolu_01AYwTomvN5938g3MWHoZxzF","duration_ms":2}
+{
+  "session_id": "test-session-0001",
+  "transcript_path": "/tmp/basalt-hook-fixtures/transcript.jsonl",
+  "cwd": "/tmp/basalt-hook-fixtures/proj",
+  "prompt_id": "test-prompt-0001",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/tmp/basalt-hook-fixtures/proj/docs/test.md",
+    "content": "hello"
+  },
+  "tool_response": {
+    "type": "create",
+    "filePath": "/tmp/basalt-hook-fixtures/proj/docs/test.md",
+    "content": "hello",
+    "structuredPatch": [],
+    "originalFile": null,
+    "userModified": false
+  },
+  "tool_use_id": "toolu_testwrite001",
+  "duration_ms": 2
+}
