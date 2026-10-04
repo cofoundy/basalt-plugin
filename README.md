@@ -130,7 +130,7 @@ above the prompt keeps them: every `app.basalt.cofoundy.ai` link that enters the
 session — from the CLI, the MCP, the model's own text or a subagent — lands there.
 
 <p align="center">
-  <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Abrir, Copiar and Todos; a side pane lists every doc of the session with its space, folder and link.">
+  <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Open, Copy and All; a side pane lists every doc of the session with its space, folder and link.">
 </p>
 
 `o` opens the latest doc in your browser, `c` copies its URL, `l` (or `/basalt-links`)
@@ -141,6 +141,9 @@ so its version suffix survives), then the space, then the nearest folders.
 The mark is the real logo where the surface can draw it: the SVG on the desktop app,
 a PNG on kitty or Ghostty run directly, and `⬣` in Molten elsewhere (inside tmux,
 screen, zellij or herdr Claude Code draws no pictures).
+
+Labels are in English, and in Spanish when your locale is (`LC_ALL`, `LC_MESSAGES` or
+`LANG` starting with `es`).
 
 It is a Claude Code function-hooks module (early access); clients without function
 hooks keep the three shell hooks above, unchanged. Already installed? Update the
