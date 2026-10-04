@@ -91,7 +91,10 @@ plugins/basalt/
 ├── .mcp.json                    # the Basalt MCP server (HTTP + per-user OAuth)
 ├── commands/basalt.md           # the /basalt command
 ├── skills/basalt/SKILL.md       # the auto-invoking skill (its description is the magic)
-└── hooks/                       # three session-boundary hooks (silence by default)
+├── hooks/                       # three session-boundary hooks (silence by default)
+│   └── register.tsx             #   + the links band (a Claude Code function-hooks module)
+├── types/index.d.ts             # the band's state contract
+└── tests/                       # `claude plugin test plugins/basalt`
 ```
 
 The plugin holds **no secrets** — it points at the public MCP endpoint and auth is
@@ -116,6 +119,29 @@ it, say — an optional `publish_overrides:` block gives that exact path its own
 so you don't have to silence the whole vault to quiet one file. Every hook ships with
 tests that run against **real captured Claude Code payloads** (`hooks/tests/run.sh`) —
 a silent hook is worthless if it's silently dead.
+
+## The links band (every doc of the session, one key away)
+
+Agents publish docs mid-conversation, and the URL scrolls away with the chat. The band
+above the prompt keeps them: every `app.basalt.cofoundy.ai` link that enters the
+session — from the CLI, the MCP, the model's own text or a subagent — lands there.
+
+```
+⬣ basalt  5 docs  basalt-pm › … › v3.1-collaboration-…-review-loop-final [ Abrir ] [ Copiar ] [ Todos ]
+```
+
+`o` opens the latest doc in your browser, `c` copies its URL, `l` (or `/basalt-links`)
+opens a side pane with every doc of the session. The pane stays pinned across reloads
+and sessions until you close it. Long nested names keep the title (cut in the middle,
+so its version suffix survives), then the space, then the nearest folders.
+
+The mark is the real logo where the surface can draw it: the SVG on the desktop app,
+a PNG on kitty or Ghostty run directly, and `⬣` in Molten elsewhere (inside tmux,
+screen, zellij or herdr Claude Code draws no pictures).
+
+It is a function-hooks module
+(early access in Claude Code); clients without it keep the three shell hooks above,
+unchanged.
 
 ## Already have docs in git?
 

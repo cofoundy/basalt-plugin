@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Basalt — the trust layer for AI-generated work. Connect your AI to publish, update and share governed docs by URL.",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "basalt",
       "source": "./plugins/basalt",
       "description": "Connect your AI to Basalt — publish, update and share governed docs by URL. Bundles the Basalt MCP server (OAuth) + a skill that converges on it when you ask to publish or share written work.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "Cofoundy SAC"
       },
