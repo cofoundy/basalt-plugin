@@ -20,7 +20,7 @@ const URL_RE = /https:\/\/app\.basalt\.cofoundy\.ai\/[^\s)\]"'<>`\\]+/g
 const BAND_CHROME = 24 + 44
 const links = atom({ plugin: 'basalt', key: 'links' } as const, [])
 
-// Junta todos los strings de un content (texto del modelo, tool results, anidados).
+// Every string in a row's content (model text, tool results, nested blocks).
 const strings = (value: unknown, out: string[] = []): string[] => {
   if (typeof value === 'string') out.push(value)
   else if (Array.isArray(value)) value.forEach(v => strings(v, out))
@@ -39,7 +39,7 @@ export const toLink = (url: string, by: string, at: number): BasaltLink => {
   return { url, title, trail: trail.slice(0, -1), by, at }
 }
 
-// Rows stored by an earlier version of this mod carry no trail.
+// Rows stored by an earlier version carry no trail.
 const fresh = (link: BasaltLink) => (Array.isArray(link.trail) ? link : toLink(link.url, link.by, link.at))
 
 const cut = (text: string, room: number) => {
@@ -84,15 +84,45 @@ async function openUrl($: EngineInterface, url: string) {
   if (mac.exitCode !== 0) await $.process.run(['xdg-open', url]).catch(() => undefined)
 }
 
+// English by default; Spanish when the locale says so (POSIX precedence:
+// LC_ALL, then LC_MESSAGES, then LANG).
+const STRINGS = {
+  en: {
+    open: 'Open', copy: 'Copy', all: 'All', copied: 'Link copied',
+    pane: 'Basalt · session docs', empty: 'No Basalt docs in this session yet.',
+    command: 'List the Basalt docs of this session', opened: 'Basalt docs of this session opened in the pane.',
+    session: 'session', subagent: 'subagent',
+  },
+  es: {
+    open: 'Abrir', copy: 'Copiar', all: 'Todos', copied: 'Link copiado',
+    pane: 'Basalt · docs de la sesión', empty: 'Ningún doc de Basalt en esta sesión todavía.',
+    command: 'Lista los docs de Basalt de esta sesión', opened: 'Docs de Basalt de esta sesión abiertos en el panel.',
+    session: 'sesión', subagent: 'subagente',
+  },
+} as const
+type Strings = (typeof STRINGS)[keyof typeof STRINGS]
+
+export const pickLanguage = (lcAll?: string, lcMessages?: string, lang?: string): keyof typeof STRINGS => {
+  const locale = lcAll || lcMessages || lang || ''
+
+  return locale.toLowerCase().startsWith('es') ? 'es' : 'en'
+}
+
+async function labels($: EngineInterface): Promise<Strings> {
+  const language = pickLanguage(await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG'))
+
+  return STRINGS[language]
+}
+
 // The pane stays open across reloads and sessions until the person closes it.
 async function openPane($: EngineInterface, focus?: true) {
   await $.store.set('isPinned', true)
-  await $.ui.open({ id: PANE, title: 'Basalt · docs de la sesión', ...(focus ? { focus } : {}) })
+  await $.ui.open({ id: PANE, title: (await labels($)).pane, ...(focus ? { focus } : {}) })
 }
 
 async function copyUrl($: EngineInterface, url: string, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
   await $.ui.copy({ text: url, surface })
-  $.ui.toast('Link copiado')
+  $.ui.toast((await labels($)).copied)
 }
 
 // Whether this terminal shows kitty graphics: kitty or Ghostty, run directly.
@@ -131,7 +161,7 @@ async function mark($: EngineInterface, e: Parameters<EngineInterface['ui']['res
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'basalt-links', description: 'Lista los docs de Basalt de esta sesión' })
+    await $.command.register({ name: 'basalt-links', description: (await labels($)).command })
     if ((await $.store.get('isPinned')) === true) void openPane($)
 
     return next(e)
@@ -140,16 +170,16 @@ export const register: Register = on => {
   on('command.run', { command: 'basalt-links' }, async $ => {
     await openPane($)
 
-    return { text: 'Docs de Basalt de esta sesión abiertos en el panel.' }
+    return { text: (await labels($)).opened }
   })
 
-  // Cada fila que entra a la conversación (tuya, del modelo, de un tool, de un subagente) se escanea.
+  // Every row the conversation keeps (the person's, the model's, a tool's, a subagent's) is scanned.
   on('session.append', async ($, e, next) => {
     const stored = await next(e)
     const found = strings(e.message.content).flatMap(text => text.match(URL_RE) ?? [])
     if (found.length > 0) {
       const now = await $.clock.now()
-      const by = e.agentId ? 'subagente' : 'sesión'
+      const by = e.agentId ? 'subagent' : 'session'
       await update($, links, list => {
         const known = new Set(list.map(link => link.url))
         const fresh = [...new Set(found.map(url => url.replace(/[.,;:!?]+$/, '')))]
@@ -169,6 +199,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey || !last) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
+    const t = await labels($)
     const { path, title } = crumb(last, e.props.bodyColumns - BAND_CHROME)
     const below = await next(e)
 
@@ -183,11 +214,11 @@ export const register: Register = on => {
           <Text color={MUTED}> doc{list.length === 1 ? '' : 's'}  </Text>
           <Text key="path" color={STONE}>{path}</Text>
           <Text key="title" color={ASH} bold>{title} </Text>
-          <Button key="abrir" hotkey="o" variant="primary" label="Abrir" onPress={() => openUrl($, last.url)} />
+          <Button key="abrir" hotkey="o" variant="primary" label={t.open} onPress={() => openUrl($, last.url)} />
           <Text> </Text>
-          <Button key="copiar" hotkey="c" label="Copiar" onPress={() => copyUrl($, last.url, e.surface)} />
+          <Button key="copiar" hotkey="c" label={t.copy} onPress={() => copyUrl($, last.url, e.surface)} />
           <Text> </Text>
-          <Button key="todos" hotkey="l" label="Todos" onPress={() => openPane($, true)} />
+          <Button key="todos" hotkey="l" label={t.all} onPress={() => openPane($, true)} />
         </Box>
         {below}
       </Box>
@@ -202,12 +233,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
+    const t = await labels($)
     const list = (await read($, links)).map(fresh)
     const room = Math.max(16, e.props.bodyColumns - 2)
 
     return (
       <Box flexDirection="column">
-        {list.length === 0 && <Text color={MUTED}>Ningún doc de Basalt en esta sesión todavía.</Text>}
+        {list.length === 0 && <Text color={MUTED}>{t.empty}</Text>}
         {[...list].reverse().map(link => {
           const { path } = crumb({ ...link, title: '' }, room)
 
@@ -217,10 +249,10 @@ export const register: Register = on => {
               {link.trail.length > 0 && <Text color={MUTED} wrap="truncate-start">{path.replace(/ › $/, '')}</Text>}
               <Text color={TEAL} wrap="truncate-middle">{link.url}</Text>
               <Box>
-                <Button key={`o-${link.url}`} variant="primary" label="Abrir" onPress={() => openUrl($, link.url)} />
+                <Button key={`o-${link.url}`} variant="primary" label={t.open} onPress={() => openUrl($, link.url)} />
                 <Text> </Text>
-                <Button key={`c-${link.url}`} label="Copiar" onPress={() => copyUrl($, link.url, e.surface)} />
-                <Text color={MUTED}> · {link.by}</Text>
+                <Button key={`c-${link.url}`} label={t.copy} onPress={() => copyUrl($, link.url, e.surface)} />
+                <Text color={MUTED}> · {link.by === 'subagent' || link.by === 'subagente' ? t.subagent : t.session}</Text>
               </Box>
             </Box>
           )
