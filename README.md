@@ -130,7 +130,7 @@ above the prompt keeps them: every `app.basalt.cofoundy.ai` link that enters the
 session — from the CLI, the MCP, the model's own text or a subagent — lands there.
 
 <p align="center">
-  <img src="./assets/readme/links-band.png" width="100%" alt="The Basalt band above the Claude Code prompt: the Basalt mark, '1 doc', the doc's space and title, and the buttons Abrir, Copiar and Todos.">
+  <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Abrir, Copiar and Todos; a side pane lists every doc of the session with its space, folder and link.">
 </p>
 
 `o` opens the latest doc in your browser, `c` copies its URL, `l` (or `/basalt-links`)
