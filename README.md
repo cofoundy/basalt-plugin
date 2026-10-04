@@ -41,6 +41,9 @@ remember.*
 - **Zero typing.** The bundled skill auto-fires on "publish this / share this doc /
   documéntalo" — no command to memorize. (There's a `/basalt` command too, if you
   want it.)
+- **Every link, one key away.** In Claude Code, a band above the prompt collects
+  every Basalt doc the session publishes — `o` opens the latest, `c` copies it. No
+  scrolling up the chat to find the URL. ([details](#the-links-band-every-doc-of-the-session-one-key-away))
 - **Governed by default.** Versioned, access-controlled, reviewable — because
   AI-authored work should become durable org truth, not chat scrollback.
 
@@ -126,9 +129,9 @@ Agents publish docs mid-conversation, and the URL scrolls away with the chat. Th
 above the prompt keeps them: every `app.basalt.cofoundy.ai` link that enters the
 session — from the CLI, the MCP, the model's own text or a subagent — lands there.
 
-```
-⬣ basalt  5 docs  basalt-pm › … › v3.1-collaboration-…-review-loop-final [ Abrir ] [ Copiar ] [ Todos ]
-```
+<p align="center">
+  <img src="./assets/readme/links-band.png" width="100%" alt="The Basalt band above the Claude Code prompt: the Basalt mark, '1 doc', the doc's space and title, and the buttons Abrir, Copiar and Todos.">
+</p>
 
 `o` opens the latest doc in your browser, `c` copies its URL, `l` (or `/basalt-links`)
 opens a side pane with every doc of the session. The pane stays pinned across reloads
@@ -139,9 +142,9 @@ The mark is the real logo where the surface can draw it: the SVG on the desktop 
 a PNG on kitty or Ghostty run directly, and `⬣` in Molten elsewhere (inside tmux,
 screen, zellij or herdr Claude Code draws no pictures).
 
-It is a function-hooks module
-(early access in Claude Code); clients without it keep the three shell hooks above,
-unchanged.
+It is a Claude Code function-hooks module (early access); clients without function
+hooks keep the three shell hooks above, unchanged. Already installed? Update the
+plugin (`/plugin` → basalt → update) and run `/reload-plugins`.
 
 ## Already have docs in git?
 
