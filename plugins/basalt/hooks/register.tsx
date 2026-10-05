@@ -29,6 +29,12 @@ const strings = (value: unknown, out: string[] = []): string[] => {
   return out
 }
 
+// The calls that publish: `basalt publish|move` from a shell, `publish_doc|update_doc` over MCP.
+export const isPublish = (tool: string, command: unknown): boolean =>
+  tool === 'Bash'
+    ? typeof command === 'string' && /(^|[\s;&|(])basalt\s+(publish|move)\b/.test(command)
+    : /basalt/i.test(tool) && /__(publish_doc|update_doc)$/.test(tool)
+
 // Canonical URLs are /{workspace}/{space}/{doc…}; the workspace is always the
 // same for one person, so the trail starts at the space.
 export const toLink = (url: string, by: string, at: number): BasaltLink => {
@@ -173,10 +179,12 @@ export const register: Register = on => {
     return { text: (await labels($)).opened }
   })
 
-  // Every row the conversation keeps (the person's, the model's, a tool's, a subagent's) is scanned.
-  on('session.append', async ($, e, next) => {
-    const stored = await next(e)
-    const found = strings(e.message.content).flatMap(text => text.match(URL_RE) ?? [])
+  // Only what this session published: the result of a publish, never a link it merely read
+  // (a subagent grepping old transcripts filled the band with docs nobody made).
+  on('tool.call', async ($, e, next) => {
+    const out = await next(e)
+    if (!isPublish(e.tool, (e as { command?: unknown }).command) || out.deny !== undefined || out.isError) return out
+    const found = strings([out.text, out.result]).flatMap(text => text.match(URL_RE) ?? [])
     if (found.length > 0) {
       const now = await $.clock.now()
       const by = e.agentId ? 'subagent' : 'session'
@@ -190,7 +198,7 @@ export const register: Register = on => {
       })
     }
 
-    return stored
+    return out
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
