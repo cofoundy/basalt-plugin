@@ -37,8 +37,7 @@ payload="$(cat)"
 sid="$(json_get "$payload" "session_id")"
 [ -n "$sid" ] || sid="nosession"
 df="$(dirty_file "$sid")"
-of="$(orphan_file "$sid")"
-[ -f "$df" ] || [ -f "$of" ] || exit 0                 # nothing tracked → silent
+[ -f "$df" ] || exit 0                                 # nothing tracked → silent
 
 # 2) REPLAY the append-only journal into the live set — vault docs edited since their
 #    last publish (A2) — then drop the ones the repo's own Action will publish
@@ -61,15 +60,6 @@ if [ -f "$df" ]; then
     esac
   done < <(replay_journal "$df")
 fi
-
-# 2b) Orphan bucket: docs edited in a repo with NO vault.yaml. Only speak when the CLI is
-# actually installed — without it the user is not publishing from here and the warning is
-# noise. Silence for a real user beats a warning for a hypothetical one.
-orphan_root=""
-if [ -f "$of" ] && command -v basalt >/dev/null 2>&1; then
-  orphan_root="$(head -1 "$of")"
-fi
-rm -f "$of" 2>/dev/null                                # clear either way → no re-nag
 
 # 3) Auto bucket: one diff-aware publish. Failure / no CLI → degrade into the prompt count.
 published_n=0
@@ -101,10 +91,5 @@ if [ "$prompt_n" -gt 0 ]; then
   fi
 elif [ "$published_n" -gt 0 ]; then
   printf 'Basalt: auto-published %d edited vault doc(s). Share the canonical URL(s) with the reader.\n' "$published_n"
-elif [ -n "$orphan_root" ]; then
-  # The silent-failure sensor. Says the CONSEQUENCE, not the config detail — "no
-  # vault.yaml" means nothing to a reader who has never hit this; "goes to the wrong
-  # space without erroring" is why they should care before the first publish.
-  emit_block "Basalt: docs edited in $(basename "$orphan_root"), which has no vault.yaml — publishing from here silently lands in the wrong space (exit 0). Run \`basalt onboard\` for the fix."
 fi
 exit 0

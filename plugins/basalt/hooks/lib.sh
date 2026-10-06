@@ -51,26 +51,10 @@ print("" if d is None else (d if isinstance(d, str) else json.dumps(d)))
 dirty_dir() { printf '%s/basalt-hooks' "${TMPDIR:-/tmp}"; }
 dirty_file() { printf '%s/dirty-%s.list' "$(dirty_dir)" "$1"; }   # $1 = session_id
 
-# --- orphan-list: docs edited with NO vault.yaml above them ---------------------------
-# Publishing from a repo with no vault.yaml is the ONE Basalt failure that does not
-# announce itself: with no project binding the CLI takes the first path segment as the
-# space name, so `docs/PRD.md` lands as project "docs" / slug "prd" instead of
-# project "<repo>" / slug "docs/prd" — exit 0, no warning, wrong space. Every other
-# error here is loud; this one needs a sensor. Same shape as the dirty-list: PostToolUse
-# records, Stop speaks once (batching-at-close, never push-on-edit).
-orphan_file() { printf '%s/orphan-%s.list' "$(dirty_dir)" "$1"; }  # $1 = session_id
-
-# is_doc <path> -> 0 when the file reads as publishable prose, 1 otherwise.
-# Deliberately narrow: `.mdx` anywhere (authoring it IS the intent to publish), `.md`
-# only under a `docs/` directory. A README in a code repo must never trip this — a
-# sensor that cries on every repo gets muted, and then it is worth less than nothing.
-is_doc() {
-  case "$1" in
-    *.mdx) return 0 ;;
-    */docs/*.md|*/docs/*/*.md|*/docs/*/*/*.md) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# The orphan bucket (a doc edited with NO vault.yaml above it) lived here until #19: it
+# warned at Stop about a publish that had not happened, on every doc edit in every repo.
+# The risk is real only at publish time, so the CLI owns it now — `basalt publish` tags
+# the row `no_vault_binding` when the space came from a folder name.
 
 # --- vault discovery: walk up from a file to the nearest vault.yaml -------------------
 # find_vault <abs-file-path>  ->  prints the vault.yaml path, or empty if none upward.
@@ -104,8 +88,7 @@ vault_policy() {
 # doc cannot publish — because the server REJECTS it, not because nobody tried — the only
 # lever was `publish: manual`, which silences every other doc in the vault too. What is
 # left is a nag that fires every session with no action available, which trains the reader
-# to ignore the channel. The orphan bucket already decided this case ("clear either way →
-# no re-nag"); this is the missing other half.
+# to ignore the channel.
 #
 #   name: atelier
 #   publish: prompt
