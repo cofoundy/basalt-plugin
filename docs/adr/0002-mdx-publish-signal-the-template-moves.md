@@ -3,6 +3,8 @@
 - **Status:** accepted
 - **Date:** 2026-08-17
 - **Issue:** #13
+- **Note (#19):** the orphan bucket and `is_doc()` described below were removed. The
+  no-vault warning moved to the CLI (`no_vault_binding`, at publish time).
 
 ## Context
 

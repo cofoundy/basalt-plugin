@@ -30,8 +30,9 @@ next step. Follow that step instead of improvising setup.
 ⚠️ **On a repo's FIRST publish, check the project binding.** Without a `vault.yaml` at
 the docs root the CLI takes the first path segment as the space name — `docs/PRD.md`
 publishes as project `docs` / slug `prd` instead of project `<repo>` / slug `docs/prd`.
-Exit 0, no warning, wrong space. Confirm with `basalt status <file> --json` and check
-the `project` field. It is the only failure here that does not announce itself.
+Exit 0, wrong space; the only signal is a `no_vault_binding` warning on the row
+(basalt-cli > 0.14.0). Confirm with `basalt status <file> --json` and check the `project`
+field.
 
 ## If it was born in this conversation (MCP)
 

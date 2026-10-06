@@ -31,13 +31,14 @@ Without a `vault.yaml` at the docs root there is no project binding, so the CLI 
 **first path segment as the space name**:
 
 ```
-no vault.yaml    docs/PRD.md  →  project "docs",   slug "prd"        exit 0, no warning
+no vault.yaml    docs/PRD.md  →  project "docs",   slug "prd"        exit 0, warning no_vault_binding
 with vault.yaml  docs/PRD.md  →  project "<repo>", slug "docs/prd"
 ```
 
-The publish reports success and lands in a space nobody meant to create. Every other
-error in this system is loud; this one is not. Before the first publish in a repo,
-confirm the binding:
+The publish reports success and lands in a space nobody meant to create. It exits 0;
+since basalt-cli > 0.14.0 the row carries a `no_vault_binding` warning naming the space it
+resolved (older CLIs print nothing). Read the warnings, and before the first publish in
+a repo confirm the binding:
 
 ```bash
 basalt status <file> --json     # the `project` field must be the intended space

@@ -119,44 +119,20 @@ PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh" >/dev/null
 out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/posttooluse-no-filepath.json")" "$HOOKS/post-edit.sh")"; rc=$?
 { [ -z "$out" ] && [ $rc -eq 0 ]; } && ok "negative control (no file_path) → silent, exit 0" || no "negative control should be silent (out:$out rc:$rc)"
 
-# --- orphan sensor: a doc edited where NO vault.yaml exists above it -------------------
-# The one Basalt failure that returns exit 0: with no vault.yaml there is no project
-# binding, so `docs/PRD.md` publishes as project "docs" / slug "prd" instead of
-# project "<repo>" / slug "docs/prd" — wrong space, no warning. PostToolUse records the
-# repo root; Stop speaks once. Narrow by design: a README in a code repo must not trip it.
-# `append_once` STAYS here (B1 removed it from the dirty list only): the dedup is
-# semantically required — the fix is one vault.yaml, not one per file.
+# --- #19: a doc edited where NO vault.yaml exists above it records NOTHING ------------
+# The orphan sensor used to record the repo root here and block at Stop on every doc edit
+# in every repo — warning about a publish that had not happened. The risk is real only at
+# publish time, so `basalt publish` owns it now (`no_vault_binding`). Pin the silence.
 reset_dirty
 ORPH="$WORK/orphanrepo"; mkdir -p "$ORPH/docs"
-( cd "$ORPH" && git init -q && git config user.email t@example.invalid && git config user.name t ) >/dev/null 2>&1
-ORPH_REAL="$(cd "$ORPH" && git rev-parse --show-toplevel)"
-OF_PE="$DDIR/orphan-$sid_pe.list"
-
-echo x > "$ORPH/docs/PRD.md"
-pl="$(jq -c --arg f "$ORPH/docs/PRD.md" '.tool_input.file_path=$f' "$FIX/posttooluse-write.json")"
-out="$(PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh")"
-{ [ -z "$out" ] && [ -f "$OF_PE" ] && grep -Fxq "$ORPH_REAL" "$OF_PE"; } \
-  && ok "doc with no vault → repo root recorded, zero output" || no "orphan not recorded"
-
-echo x > "$ORPH/docs/OTHER.md"
-pl="$(jq -c --arg f "$ORPH/docs/OTHER.md" '.tool_input.file_path=$f' "$FIX/posttooluse-write.json")"
-PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh" >/dev/null
-n="$(wc -l < "$OF_PE" | tr -d ' ')"
-[ "$n" = "1" ] && ok "second doc, same repo → ONE entry (append_once stays on the orphan list)" \
-  || no "orphan should dedupe by repo root (entries=$n)"
-
-echo x > "$ORPH/README.md"
-pl="$(jq -c --arg f "$ORPH/README.md" '.tool_input.file_path=$f' "$FIX/posttooluse-write.json")"
-PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh" >/dev/null
-n="$(wc -l < "$OF_PE" | tr -d ' ')"
-[ "$n" = "1" ] && ok "README in a code repo → NOT flagged (sensor stays narrow)" \
-  || no "README should not trip the orphan sensor (entries=$n)"
-
-mkdir -p "$ORPH/src"; echo x > "$ORPH/src/note.md"
-pl="$(jq -c --arg f "$ORPH/src/note.md" '.tool_input.file_path=$f' "$FIX/posttooluse-write.json")"
-PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh" >/dev/null
-n="$(wc -l < "$OF_PE" | tr -d ' ')"
-[ "$n" = "1" ] && ok "stray .md outside docs/ → NOT flagged" || no "stray .md tripped it (entries=$n)"
+( cd "$ORPH" && git init -q ) >/dev/null 2>&1
+for f in docs/PRD.md docs/x.mdx; do
+  echo x > "$ORPH/$f"
+  pl="$(jq -c --arg f "$ORPH/$f" '.tool_input.file_path=$f' "$FIX/posttooluse-write.json")"
+  out="$(PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh")"
+  { [ -z "$out" ] && [ -z "$(ls -A "$DDIR" 2>/dev/null)" ]; } \
+    && ok "#19: $f with no vault → nothing recorded, zero output" || no "#19: $f should record nothing"
+done
 
 out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/malformed.json")" "$HOOKS/post-edit.sh")"; rc=$?
 { [ -z "$out" ] && [ $rc -eq 0 ]; } && ok "malformed payload → silent, exit 0" || no "malformed should be silent (out:$out rc:$rc)"
@@ -375,35 +351,13 @@ printf '%s\n-%s\n' "$D" "$D" > "$DF_STOP"
 out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/stop-inactive.json")" "$HOOKS/stop.sh")"
 [ -z "$out" ] && ok "journal replaying to an empty live set → silent" || no "tombstoned doc should be silent (got: $out)"
 
-# --- orphan sensor at Stop -------------------------------------------------------------
-OF_STOP="$DDIR/orphan-$sid_stop.list"
-
-reset_dirty; mkdir -p "$DDIR"; printf '%s\n' "$WORK/myrepo" > "$OF_STOP"
+# --- #19: a no-vault doc edit reaches Stop as SILENCE, never a block -------------------
+reset_dirty
+pl="$(jq -c --arg f "$ORPH/docs/PRD.md" --arg s "$sid_stop" '.tool_input.file_path=$f | .session_id=$s' "$FIX/posttooluse-write.json")"
+PATH="$PATH_WITH_STUB" run "$pl" "$HOOKS/post-edit.sh" >/dev/null
 out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/stop-inactive.json")" "$HOOKS/stop.sh")"
-printf '%s' "$out" | jq -e '.decision=="block" and (.reason|test("no vault.yaml"))' >/dev/null 2>&1 \
-  && ok "orphan repo + CLI → block nudge naming the silent failure" || no "orphan should nudge (got: $out)"
-r="$(printf '%s' "$out" | jq -r .reason)"
-[ "${#r}" -le 200 ] && ok "budget: orphan reason ${#r}B ≤ 200B" || no "orphan reason too long (${#r}B)"
-[ ! -f "$OF_STOP" ] && ok "orphan list cleared after speaking → no re-nag" || no "orphan list should clear"
-
-# No CLI → the user is not publishing from here; the warning would be noise.
-reset_dirty; mkdir -p "$DDIR"; printf '%s\n' "$WORK/myrepo" > "$OF_STOP"
-out="$(PATH="$PATH_NO_BASALT" run "$(cat "$FIX/stop-inactive.json")" "$HOOKS/stop.sh")"
-[ -z "$out" ] && ok "orphan + no CLI → SILENT (not a Basalt user, not their problem)" \
-  || no "orphan without CLI should stay silent (got: $out)"
-
-# A real dirty doc outranks the orphan hint: a pending publish beats a setup warning.
-reset_dirty; mkdir -p "$DDIR"; D="$(mk_vault "$WORK/vorph" prompt)"
-printf '%s\n' "$D" > "$DF_STOP"; printf '%s\n' "$WORK/myrepo" > "$OF_STOP"
-out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/stop-inactive.json")" "$HOOKS/stop.sh")"
-printf '%s' "$out" | jq -e '.reason|test("unpublished")' >/dev/null 2>&1 \
-  && ok "dirty doc outranks orphan hint (one message, the actionable one)" || no "dirty should win (got: $out)"
-
-# Loop guard must cover the orphan path too, or Stop nags forever.
-reset_dirty; mkdir -p "$DDIR"; printf '%s\n' "$WORK/myrepo" > "$OF_STOP"
-out="$(PATH="$PATH_WITH_STUB" run "$(cat "$FIX/stop-active-guard.json")" "$HOOKS/stop.sh")"; rc=$?
-{ [ -z "$out" ] && [ $rc -eq 0 ]; } && ok "orphan + stop_hook_active → silent (loop guard holds)" \
-  || no "orphan must respect the loop guard (out:$out rc:$rc)"
+[ -z "$out" ] && ok "#19: no-vault doc edit + CLI installed → Stop silent (no block)" \
+  || no "#19: Stop must not block on a no-vault edit (got: $out)"
 
 echo "── stop.sh — Mechanism B (the #4 repo-backed-vault case) ────"
 # The mandated flow for a repo-backed vault is commit + push → the repo's Action
