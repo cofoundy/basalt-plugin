@@ -126,8 +126,14 @@ a silent hook is worthless if it's silently dead.
 ## The links band (every doc of the session, one key away)
 
 Agents publish docs mid-conversation, and the URL scrolls away with the chat. The band
-above the prompt keeps them: every `app.basalt.cofoundy.ai` link that enters the
-session — from the CLI, the MCP, the model's own text or a subagent — lands there.
+above the prompt keeps the docs the session (or one of its subagents) published, and only
+those: the link a `basalt publish`/`basalt move` or an MCP `publish_doc`/`update_doc`
+returns, and the docs a `git push` to `main` hands to a vault's publish Action (each
+`.md`/`.mdx` the push changed under a `vault.yaml`, in a repo whose workflows run
+`basalt publish`). A link the session merely read — in code, a log, an old transcript —
+never lands there. A pushed doc gets its `/{space}/{slug}` URL, which the app redirects
+to the canonical one; when the band already holds a doc of that space, it uses that
+workspace directly.
 
 <p align="center">
   <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Open, Copy and All; a side pane lists every doc of the session with its space, folder and link.">
