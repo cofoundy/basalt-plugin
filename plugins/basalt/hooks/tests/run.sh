@@ -568,6 +568,20 @@ D3="$(add_doc "$R_BLOCK" docs/note.mdx push)"
 seed_stop "$D3"
 expect_silent "(a) block-sequence list form (paths:\\n  - '**.md'\\n  - '**.mdx') is read too"
 
+# (a′) `publish: auto` wins over Mechanism B. The Action publishes a pushed doc a minute
+# later; a vault that asked for `auto` asked for THIS turn. Publishing what the Action will
+# also publish costs nothing (the server sha-skips the second one), so `auto` publishes it
+# now instead of leaving it to the runner queue.
+R_AUTOWF="$(mk_repo autowfvault "$WF_CANON")"
+printf 'name: autowfvault\npublish: auto\n' > "$R_AUTOWF/vault.yaml"
+git -C "$R_AUTOWF" commit -qam auto >/dev/null 2>&1 && git -C "$R_AUTOWF" push -q origin main >/dev/null 2>&1
+D_AUTOWF="$(add_doc "$R_AUTOWF" docs/note.md push)"
+seed_stop "$D_AUTOWF"; : > "$BASALT_STUB_CALLS"
+out="$(BASALT_STUB_MODE=publish-ok stop_out)"
+{ printf '%s' "$out" | grep -qi 'auto-published' && grep -Fxq "$D_AUTOWF" "$BASALT_STUB_CALLS"; } \
+  && ok "(a′) publish: auto + doc the Action covers → published THIS turn, not left to the runner" \
+  || no "(a′) auto must not defer to the Action (out:${out:-<silence>} calls:$(cat "$BASALT_STUB_CALLS"))"
+
 # (b) THE NEGATIVE ARM — the one that gets skipped. A fix that silences the hook in all
 # three arms has deleted the feature instead of repairing it.
 D_DIRTY="$(add_doc "$R_CANON" docs/uncommitted.md dirty)"

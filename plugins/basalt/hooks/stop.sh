@@ -52,9 +52,12 @@ auto_files=(); prompt_n=0
 if [ -f "$df" ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
+    policy="$(doc_policy "$(find_vault "$f")" "$f")"
+    # `auto` asked for THIS turn: the Action would publish a minute later, and a second
+    # publish of the same source is a server sha-skip. So `auto` never defers to it.
+    [ "$policy" = "auto" ] && { auto_files+=("$f"); continue; }
     published_by_repo_action "$f" && continue          # Mechanism B → already publishing
-    case "$(doc_policy "$(find_vault "$f")" "$f")" in
-      auto)   auto_files+=("$f") ;;
+    case "$policy" in
       manual) : ;;                                     # explicitly silent
       *)      prompt_n=$((prompt_n + 1)) ;;            # prompt (default)
     esac
