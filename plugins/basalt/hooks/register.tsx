@@ -50,6 +50,56 @@ export const isPublish = (tool: string, command: unknown): boolean =>
 export const isGitPush = (command: unknown): boolean =>
   typeof command === 'string' && GIT_PUSH.test(commandText(command))
 
+// What a publish said about each URL it printed: created or a new version, and which one.
+// The CLI prints one row per doc — `new  space/slug  <url>  v1` — and `--json` / MCP return
+// objects with `status` and `version`. Version 1 IS a creation, whichever surface said it.
+type Fact = { kind?: 'new' | 'edited'; version?: number }
+const EDITED = new Set(['modified', 'republished', 'overwritten', 'metadata-only', 'conflict'])
+const kindOf = (status?: unknown, version?: number): Fact['kind'] => {
+  const word = typeof status === 'string' ? status.replace(/^✗\s*/, '') : undefined
+  if (word === 'new' || version === 1) return 'new'
+  if ((word && EDITED.has(word)) || (version !== undefined && version > 1)) return 'edited'
+  return undefined
+}
+
+const clean = (url: string) => url.replace(/[.,;:!?]+$/, '')
+
+export const publishFacts = (text: string): Map<string, Fact> => {
+  const facts = new Map<string, Fact>()
+  const put = (url: string, fact: Fact) => {
+    const before = facts.get(url) ?? {}
+    facts.set(url, { kind: before.kind ?? fact.kind, version: before.version ?? fact.version })
+  }
+  // JSON (`--json`, MCP Trust Object): every object that carries a Basalt URL.
+  const walk = (value: unknown) => {
+    if (Array.isArray(value)) return value.forEach(walk)
+    if (!value || typeof value !== 'object') return
+    const o = value as Record<string, unknown>
+    const url = [o.canonicalUrl, o.canonical_url, o.url].find(
+      (u): u is string => typeof u === 'string' && u.startsWith('https://app.basalt.cofoundy.ai/'),
+    )
+    if (url) {
+      const version = typeof o.version === 'number' ? o.version : undefined
+      put(clean(url), { kind: kindOf(o.status, version), version })
+    }
+    Object.values(o).forEach(walk)
+  }
+  for (const chunk of text.split(/\n(?=[[{])/)) {
+    try { walk(JSON.parse(chunk)) } catch { /* not JSON: the row reader below */ }
+  }
+  // Human rows: the status is the line's first word, the version a `v<N>` on the same line.
+  for (const line of text.split('\n')) {
+    const urls = line.match(URL_RE)
+    if (!urls) continue
+    const status = line.trim().replace(/^✗\s*/, '').split(/\s+/)[0]
+    const v = line.match(/\sv(\d+)\b/)
+    const version = v ? Number(v[1]) : undefined
+    for (const url of urls) put(clean(url), { kind: kindOf(status, version), version })
+  }
+
+  return facts
+}
+
 // The ranges a `git push` moved onto a default branch ("  1a2b3c4..5d6e7f8  main -> main").
 // A new branch, a delete or a push to any other branch publishes nothing: the vault's
 // Action publishes on a push to main.
@@ -97,18 +147,22 @@ export type PushIo = {
 // changed under a vault.yaml, in a repo whose workflows run `basalt publish`. The URL is
 // the flat /{space}/{slug} one: the app sends whoever may read it to the canonical URL,
 // and the workspace is not knowable from the repo.
-export async function pushedDocs(io: PushIo, dir: string, output: string): Promise<{ url: string; trail: string[]; title: string }[]> {
+export async function pushedDocs(io: PushIo, dir: string, output: string): Promise<{ url: string; trail: string[]; title: string; kind: 'new' | 'edited' }[]> {
   const ranges = pushedRanges(output)
   if (ranges.length === 0) return []
   const top = await io.git(dir, ['rev-parse', '--show-toplevel'])
   if (top.exitCode !== 0) return []
   const root = top.stdout.trim()
-  const docs: { url: string; trail: string[]; title: string }[] = []
+  const docs: { url: string; trail: string[]; title: string; kind: 'new' | 'edited' }[] = []
   for (const { from, to } of ranges) {
     const action = await io.git(root, ['grep', '-l', '-e', 'basalt publish', to, '--', '.github/workflows'])
     if (action.exitCode !== 0) continue
-    const changed = await io.git(root, ['diff', '--name-only', '--diff-filter=AMR', `${from}..${to}`, '--', '*.md', '*.mdx'])
-    for (const file of changed.stdout.split('\n').filter(Boolean)) {
+    // `A` is a doc the push created; `M`/`R` a new version of one that existed.
+    const changed = await io.git(root, ['diff', '--name-status', '--diff-filter=AMR', `${from}..${to}`, '--', '*.md', '*.mdx'])
+    for (const row of changed.stdout.split('\n').filter(Boolean)) {
+      const cols = row.split('\t')
+      const kind = cols[0]?.startsWith('A') ? 'new' : 'edited'
+      const file = cols[cols.length - 1] ?? ''
       const parts = file.split('/')
       for (let depth = parts.length - 1; depth >= 0; depth--) {
         const yaml = await io.read([root, ...parts.slice(0, depth), 'vault.yaml'].join('/'))
@@ -117,7 +171,7 @@ export async function pushedDocs(io: PushIo, dir: string, output: string): Promi
         const slug = normalizeSlug(parts.slice(depth).join('/'))
         if (space && slug) {
           const path = slug.split('/')
-          docs.push({ url: `${BASE}/${space}/${slug}`, trail: [space, ...path.slice(0, -1)], title: path[path.length - 1] ?? slug })
+          docs.push({ url: `${BASE}/${space}/${slug}`, trail: [space, ...path.slice(0, -1)], title: path[path.length - 1] ?? slug, kind })
         }
         break
       }
@@ -157,6 +211,21 @@ export const withWorkspace = (link: BasaltLink, list: BasaltLink[]): BasaltLink 
 
 // Rows stored by an earlier version carry no trail.
 const fresh = (link: BasaltLink) => (Array.isArray(link.trail) ? link : toLink(link.url, link.by, link.at))
+
+// Created docs first, then new versions, each newest first: what the person most likely
+// wants to open is what this session MADE. Rows from an earlier band (no kind) go last.
+const RANK = { new: 0, edited: 1, unknown: 2 } as const
+export const ordered = (list: BasaltLink[]): BasaltLink[] =>
+  [...list].sort((a, b) => RANK[a.kind ?? 'unknown'] - RANK[b.kind ?? 'unknown'] || b.at - a.at)
+
+// Publishing a doc again updates its row instead of adding nothing: the time moves, the
+// version is the latest, and a doc this session created stays «new».
+export const merge = (row: BasaltLink, again: BasaltLink): BasaltLink => ({
+  ...row,
+  at: Math.max(row.at, again.at),
+  kind: row.kind === 'new' || again.kind === 'new' ? 'new' : (again.kind ?? row.kind),
+  version: Math.max(row.version ?? 0, again.version ?? 0) || undefined,
+})
 
 const cut = (text: string, room: number) => {
   if (text.length <= room) return text
@@ -208,15 +277,30 @@ const STRINGS = {
     pane: 'Basalt · session docs', empty: 'No Basalt docs in this session yet.',
     command: 'List the Basalt docs of this session', opened: 'Basalt docs of this session opened in the pane.',
     session: 'session', subagent: 'subagent',
+    new: 'new', edited: 'edited', newGroup: 'New', editedGroup: 'Edited',
   },
   es: {
     open: 'Abrir', copy: 'Copiar', all: 'Todos', copied: 'Link copiado',
     pane: 'Basalt · docs de la sesión', empty: 'Ningún doc de Basalt en esta sesión todavía.',
     command: 'Lista los docs de Basalt de esta sesión', opened: 'Docs de Basalt de esta sesión abiertos en el panel.',
     session: 'sesión', subagent: 'subagente',
+    new: 'nuevo', edited: 'editado', newGroup: 'Nuevos', editedGroup: 'Editados',
   },
 } as const
 type Strings = (typeof STRINGS)[keyof typeof STRINGS]
+
+// «nuevo» / «editado v3» — the one word that says what this session did to the doc.
+export const tag = (link: BasaltLink, t: Pick<Strings, 'new' | 'edited'>): string =>
+  link.kind === undefined ? '' : `${link.kind === 'new' ? t.new : t.edited}${link.version ? ` v${link.version}` : ''}`
+
+// «1 nuevo · 2 editados»; falls back to the plain count when no row knows its kind.
+export const tally = (list: BasaltLink[], t: Pick<Strings, 'new' | 'edited'>, es: boolean): string => {
+  const n = list.filter(l => l.kind === 'new').length
+  const m = list.filter(l => l.kind === 'edited').length
+  if (n + m === 0) return `${list.length} doc${list.length === 1 ? '' : 's'}`
+  const plural = (word: string, k: number) => (k === 1 || !es ? word : `${word}s`)
+  return [n ? `${n} ${plural(t.new, n)}` : '', m ? `${m} ${plural(t.edited, m)}` : ''].filter(Boolean).join(' · ')
+}
 
 export const pickLanguage = (lcAll?: string, lcMessages?: string, lang?: string): keyof typeof STRINGS => {
   const locale = lcAll || lcMessages || lang || ''
@@ -304,8 +388,7 @@ export const register: Register = on => {
     const by = e.agentId ? 'subagent' : 'session'
     const now = await $.clock.now()
     if (publish) {
-      for (const url of new Set((text.match(URL_RE) ?? []).map(url => url.replace(/[.,;:!?]+$/, ''))))
-        found.push(toLink(url, by, now))
+      for (const [url, fact] of publishFacts(text)) found.push({ ...toLink(url, by, now), ...fact })
     } else {
       const dir = pushDir(command as string, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
       for (const doc of await pushedDocs(pushIo($), dir, text).catch(() => [])) found.push({ ...doc, by, at: now })
@@ -314,10 +397,14 @@ export const register: Register = on => {
       // One doc, one row: a flat /{space}/{slug} and its canonical /{ws}/{space}/{slug} are the same doc.
       const key = (link: BasaltLink) => [...link.trail, link.title].join('/')
       await update($, links, list => {
-        const known = new Set(list.map(fresh).map(key))
-        const added = found.filter(link => !known.has(key(link)) && known.add(key(link))).map(link => withWorkspace(link, list))
+        const rows = list.map(fresh)
+        for (const link of found) {
+          const i = rows.findIndex(row => key(row) === key(link))
+          if (i >= 0) rows[i] = merge(rows[i] as BasaltLink, link)
+          else rows.push(withWorkspace(link, rows))
+        }
 
-        return [...list, ...added]
+        return rows
       })
     }
 
@@ -325,13 +412,15 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const list = (await read($, links)).map(fresh)
-    const last = list[list.length - 1]
+    const list = ordered((await read($, links)).map(fresh))
+    const last = list[0]
     if (e.props.hasSurvey || !last) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const t = await labels($)
-    const { path, title } = crumb(last, e.props.bodyColumns - BAND_CHROME)
+    const count = tally(list, t, t === STRINGS.es)
+    const label = tag(last, t)
+    const { path, title } = crumb(last, e.props.bodyColumns - BAND_CHROME - count.length - (label ? label.length + 3 : 0))
     const below = await next(e)
 
     return (
@@ -341,10 +430,11 @@ export const register: Register = on => {
           <Text> </Text>
           <Text color={ASH} backgroundColor={COLUMN} bold> basalt </Text>
           <Text> </Text>
-          <Text color={TEAL} bold>{list.length}</Text>
-          <Text color={MUTED}> doc{list.length === 1 ? '' : 's'}  </Text>
+          <Text key="count" color={TEAL} bold>{count}</Text>
+          <Text>  </Text>
           <Text key="path" color={STONE}>{path}</Text>
           <Text key="title" color={ASH} bold>{title} </Text>
+          {label ? <Text key="tag" color={last.kind === 'new' ? TEAL : MUTED}>· {label} </Text> : null}
           <Button key="abrir" hotkey="o" variant="primary" label={t.open} onPress={() => openUrl($, last.url)} />
           <Text> </Text>
           <Button key="copiar" hotkey="c" label={t.copy} onPress={() => copyUrl($, last.url, e.surface)} />
@@ -365,29 +455,37 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const t = await labels($)
-    const list = (await read($, links)).map(fresh)
+    const list = ordered((await read($, links)).map(fresh))
     const room = Math.max(16, e.props.bodyColumns - 2)
+    const row = (link: BasaltLink) => {
+      const { path } = crumb({ ...link, title: '' }, room)
+      const label = tag(link, t)
+
+      return (
+        <Box key={`r-${link.url}`} flexDirection="column" marginBottom={1}>
+          <Text color={ASH} bold wrap="truncate-middle">{link.title}</Text>
+          {link.trail.length > 0 && <Text color={MUTED} wrap="truncate-start">{path.replace(/ › $/, '')}</Text>}
+          <Text color={TEAL} wrap="truncate-middle">{link.url}</Text>
+          <Box>
+            <Button key={`o-${link.url}`} variant="primary" label={t.open} onPress={() => openUrl($, link.url)} />
+            <Text> </Text>
+            <Button key={`c-${link.url}`} label={t.copy} onPress={() => copyUrl($, link.url, e.surface)} />
+            <Text color={MUTED}> · {label ? `${label} · ` : ''}{link.by === 'subagent' || link.by === 'subagente' ? t.subagent : t.session}</Text>
+          </Box>
+        </Box>
+      )
+    }
+    const made = list.filter(link => link.kind === 'new')
+    const rest = list.filter(link => link.kind !== 'new')
+    const grouped = made.length > 0 && rest.length > 0
 
     return (
       <Box flexDirection="column">
         {list.length === 0 && <Text color={MUTED}>{t.empty}</Text>}
-        {[...list].reverse().map(link => {
-          const { path } = crumb({ ...link, title: '' }, room)
-
-          return (
-            <Box flexDirection="column" marginBottom={1}>
-              <Text color={ASH} bold wrap="truncate-middle">{link.title}</Text>
-              {link.trail.length > 0 && <Text color={MUTED} wrap="truncate-start">{path.replace(/ › $/, '')}</Text>}
-              <Text color={TEAL} wrap="truncate-middle">{link.url}</Text>
-              <Box>
-                <Button key={`o-${link.url}`} variant="primary" label={t.open} onPress={() => openUrl($, link.url)} />
-                <Text> </Text>
-                <Button key={`c-${link.url}`} label={t.copy} onPress={() => copyUrl($, link.url, e.surface)} />
-                <Text color={MUTED}> · {link.by === 'subagent' || link.by === 'subagente' ? t.subagent : t.session}</Text>
-              </Box>
-            </Box>
-          )
-        })}
+        {grouped && <Text key="h-new" color={TEAL} bold>{t.newGroup} · {made.length}</Text>}
+        {made.map(row)}
+        {grouped && <Text key="h-edited" color={MUTED} bold>{t.editedGroup} · {rest.length}</Text>}
+        {rest.map(row)}
       </Box>
     )
   })

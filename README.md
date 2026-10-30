@@ -140,7 +140,15 @@ workspace directly.
   <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Open, Copy and All; a side pane lists every doc of the session with its space, folder and link.">
 </p>
 
-`o` opens the latest doc in your browser, `c` copies its URL, `l` (or `/basalt-links`)
+**New first, then edits.** Each doc says what the session did to it: `new v1` when the
+session created it, `edited v7` when it published a new version of a doc that already
+existed (the version comes from the server; basalt-cli ≥ 0.16.1 prints it, and a pushed
+doc is `new` when the push added the file). The band shows the newest doc the session
+*created*, with the tally beside it (`1 new · 2 edited`); the pane lists the created docs
+first, under their own heading, then the edits, newest first in each. Publishing the same
+doc again updates its row: the version moves, and a doc the session created stays `new`.
+
+`o` opens the doc in the band in your browser, `c` copies its URL, `l` (or `/basalt-links`)
 opens a side pane with every doc of the session. The pane stays pinned across reloads
 and sessions until you close it. Long nested names keep the title (cut in the middle,
 so its version suffix survives), then the space, then the nearest folders.
