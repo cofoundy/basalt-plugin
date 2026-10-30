@@ -114,7 +114,8 @@ that talks when it doesn't need to is just noise:
   network, no output).
 - **At the end of a turn** — if you edited vault docs but didn't publish, one line
   asks whether to publish. Set `publish: auto` in that `vault.yaml` and it publishes
-  the changed files for you (diff-aware, once per turn — never on every keystroke).
+  the changed files for you (diff-aware, once per turn — never on every keystroke),
+  even when the repo's own publish Action would get to them a minute later.
 
 Per-vault policy lives in `vault.yaml`: `publish: prompt` (default) · `auto` ·
 `manual`. When one doc needs a different answer than its vault — the server refuses
