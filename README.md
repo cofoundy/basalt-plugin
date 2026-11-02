@@ -140,15 +140,21 @@ workspace directly.
   <img src="./assets/readme/links-band.svg" width="100%" alt="A Claude Code session where the agent published three docs. Above the prompt, the Basalt band shows the mark, 3 docs and the latest one, architecture-v2, with the buttons Open, Copy and All; a side pane lists every doc of the session with its space, folder and link.">
 </p>
 
-**New first, then edits.** Each doc says what the session did to it: `new v1` when the
-session created it, `edited v7` when it published a new version of a doc that already
-existed (the version comes from the server; basalt-cli ≥ 0.16.1 prints it, and a pushed
-doc is `new` when the push added the file). The band shows the newest doc the session
-*created*, with the tally beside it (`1 new · 2 edited`); the pane lists the created docs
-first, under their own heading, then the edits, newest first in each. Publishing the same
-doc again updates its row: the version moves, and a doc the session created stays `new`.
+**Unseen first.** A doc is *unseen* until you open or copy it, and turns unseen again when
+the session publishes it once more: a doc an agent published while you were away from a
+long session never hides behind one you already read. The band shows the first unseen
+doc with the count beside it (`● 2 unseen`) and goes quiet (`5 docs`, dimmed) once you
+opened everything; the pane lists the unseen docs under their own heading, then the seen
+ones. Within each group, created docs come before new versions, newest first.
 
-`o` opens the doc in the band in your browser, `c` copies its URL, `l` (or `/basalt-links`)
+Each doc also says what the session did to it: `created v1` when the session created it,
+`edited v7` when it published a new version of a doc that already existed (the version
+comes from the server; basalt-cli ≥ 0.16.1 prints it, and a pushed doc is `created` when
+the push added the file). A doc the session created stays `created` when it publishes it
+again.
+
+`o` opens the doc in the band in your browser (no browser on the box, as over SSH: it
+copies the link and says so), `c` copies its URL, `l` (or `/basalt-links`)
 opens a side pane with every doc of the session. The pane stays pinned across reloads
 and sessions until you close it. Long nested names keep the title (cut in the middle,
 so its version suffix survives), then the space, then the nearest folders.

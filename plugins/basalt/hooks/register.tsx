@@ -212,14 +212,26 @@ export const withWorkspace = (link: BasaltLink, list: BasaltLink[]): BasaltLink 
 // Rows stored by an earlier version carry no trail.
 const fresh = (link: BasaltLink) => (Array.isArray(link.trail) ? link : toLink(link.url, link.by, link.at))
 
-// Created docs first, then new versions, each newest first: what the person most likely
-// wants to open is what this session MADE. Rows from an earlier band (no kind) go last.
+// Unseen: published since the person last opened or copied it (or never opened at all).
+export const isUnseen = (link: BasaltLink): boolean => link.seenAt === undefined || link.at > link.seenAt
+
+// What the person has not opened yet comes first: a doc published while they were away
+// from the session must not hide behind one they already read. Within each group, created
+// docs before new versions, newest first; rows from an earlier band (no kind) last.
 const RANK = { new: 0, edited: 1, unknown: 2 } as const
 export const ordered = (list: BasaltLink[]): BasaltLink[] =>
-  [...list].sort((a, b) => RANK[a.kind ?? 'unknown'] - RANK[b.kind ?? 'unknown'] || b.at - a.at)
+  [...list].sort(
+    (a, b) =>
+      Number(isUnseen(b)) - Number(isUnseen(a)) || RANK[a.kind ?? 'unknown'] - RANK[b.kind ?? 'unknown'] || b.at - a.at,
+  )
 
-// Publishing a doc again updates its row instead of adding nothing: the time moves, the
-// version is the latest, and a doc this session created stays «new».
+// Opening or copying a doc is seeing it.
+export const markSeen = (list: BasaltLink[], url: string, at: number): BasaltLink[] =>
+  list.map(link => (link.url === url ? { ...link, seenAt: Math.max(at, link.at) } : link))
+
+// Publishing a doc again updates its row instead of adding nothing: the time moves (so a
+// doc already seen turns unseen again), the version is the latest, and a doc this session
+// created stays created.
 export const merge = (row: BasaltLink, again: BasaltLink): BasaltLink => ({
   ...row,
   at: Math.max(row.at, again.at),
@@ -235,9 +247,6 @@ const cut = (text: string, room: number) => {
   return text.slice(0, head) + '…' + text.slice(text.length - (keep - head))
 }
 
-// Fits "space › folder › title" into `room` cells: the title always survives
-// (cut in the middle, so its start and its version suffix stay), then the
-// nearest folders, and whatever does not fit collapses to "…".
 // Fits "space › folder › title" into `room` cells. Priority: the title (cut in
 // the middle, so its start and its version suffix stay), then the space, then
 // the nearest folders; the folders that do not fit collapse to "…".
@@ -264,42 +273,37 @@ export const crumb = (link: BasaltLink, room: number) => {
   return { path: [...head, '…', ...near].map(part => part + ' › ').join(''), title }
 }
 
-async function openUrl($: EngineInterface, url: string) {
-  const mac = await $.process.run(['open', url]).catch(() => ({ exitCode: 1 }))
-  if (mac.exitCode !== 0) await $.process.run(['xdg-open', url]).catch(() => undefined)
-}
-
 // English by default; Spanish when the locale says so (POSIX precedence:
 // LC_ALL, then LC_MESSAGES, then LANG).
 const STRINGS = {
   en: {
-    open: 'Open', copy: 'Copy', all: 'All', copied: 'Link copied',
+    open: 'Open', copy: 'Copy', all: 'All', copied: 'Link copied', notCopied: 'Could not copy the link',
+    noBrowser: 'No browser here — link copied',
     pane: 'Basalt · session docs', empty: 'No Basalt docs in this session yet.',
     command: 'List the Basalt docs of this session', opened: 'Basalt docs of this session opened in the pane.',
     session: 'session', subagent: 'subagent',
-    new: 'new', edited: 'edited', newGroup: 'New', editedGroup: 'Edited',
+    new: 'created', edited: 'edited', unseen: 'unseen', unseenGroup: 'Unseen', seenGroup: 'Seen',
   },
   es: {
-    open: 'Abrir', copy: 'Copiar', all: 'Todos', copied: 'Link copiado',
+    open: 'Abrir', copy: 'Copiar', all: 'Todos', copied: 'Link copiado', notCopied: 'No se pudo copiar el link',
+    noBrowser: 'Sin navegador aquí — link copiado',
     pane: 'Basalt · docs de la sesión', empty: 'Ningún doc de Basalt en esta sesión todavía.',
     command: 'Lista los docs de Basalt de esta sesión', opened: 'Docs de Basalt de esta sesión abiertos en el panel.',
     session: 'sesión', subagent: 'subagente',
-    new: 'nuevo', edited: 'editado', newGroup: 'Nuevos', editedGroup: 'Editados',
+    new: 'creado', edited: 'editado', unseen: 'sin abrir', unseenGroup: 'Sin abrir', seenGroup: 'Vistos',
   },
 } as const
 type Strings = (typeof STRINGS)[keyof typeof STRINGS]
 
-// «nuevo» / «editado v3» — the one word that says what this session did to the doc.
+// «creado v1» / «editado v3» — what this session did to the doc. Never «new»: that word
+// reads as «not seen yet», which is `isUnseen`'s job.
 export const tag = (link: BasaltLink, t: Pick<Strings, 'new' | 'edited'>): string =>
   link.kind === undefined ? '' : `${link.kind === 'new' ? t.new : t.edited}${link.version ? ` v${link.version}` : ''}`
 
-// «1 nuevo · 2 editados»; falls back to the plain count when no row knows its kind.
-export const tally = (list: BasaltLink[], t: Pick<Strings, 'new' | 'edited'>, es: boolean): string => {
-  const n = list.filter(l => l.kind === 'new').length
-  const m = list.filter(l => l.kind === 'edited').length
-  if (n + m === 0) return `${list.length} doc${list.length === 1 ? '' : 's'}`
-  const plural = (word: string, k: number) => (k === 1 || !es ? word : `${word}s`)
-  return [n ? `${n} ${plural(t.new, n)}` : '', m ? `${m} ${plural(t.edited, m)}` : ''].filter(Boolean).join(' · ')
+// «● 2 sin abrir» while something waits; «5 docs» once everything was opened.
+export const tally = (list: BasaltLink[], t: Pick<Strings, 'unseen'>): string => {
+  const unseen = list.filter(isUnseen).length
+  return unseen > 0 ? `● ${unseen} ${t.unseen}` : `${list.length} doc${list.length === 1 ? '' : 's'}`
 }
 
 export const pickLanguage = (lcAll?: string, lcMessages?: string, lang?: string): keyof typeof STRINGS => {
@@ -320,9 +324,30 @@ async function openPane($: EngineInterface, focus?: true) {
   await $.ui.open({ id: PANE, title: (await labels($)).pane, ...(focus ? { focus } : {}) })
 }
 
-async function copyUrl($: EngineInterface, url: string, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
-  await $.ui.copy({ text: url, surface })
-  $.ui.toast((await labels($)).copied)
+type Surface = Parameters<EngineInterface['ui']['copy']>[0]['surface']
+
+async function seen($: EngineInterface, url: string) {
+  const now = await $.clock.now()
+  await update($, links, list => markSeen(list.map(fresh), url, now))
+}
+
+// The press marks the doc seen first, so the band answers at once; the slow part follows.
+async function copyUrl($: EngineInterface, url: string, surface: Surface) {
+  await seen($, url)
+  const copied = await $.ui.copy({ text: url, surface }).then(r => r.isCopied, () => false)
+  const t = await labels($)
+  $.ui.toast(copied ? t.copied : t.notCopied)
+}
+
+// macOS `open`, else `xdg-open`. Neither (a remote box over SSH, no display): copy it
+// instead, so Open never does nothing.
+async function openUrl($: EngineInterface, url: string, surface: Surface) {
+  await seen($, url)
+  const run = (cmd: string) => $.process.run([cmd, url]).then(r => r.exitCode === 0, () => false)
+  if ((await run('open')) || (await run('xdg-open'))) return
+  const copied = await $.ui.copy({ text: url, surface }).then(r => r.isCopied, () => false)
+  const t = await labels($)
+  $.ui.toast(copied ? t.noBrowser : t.notCopied)
 }
 
 // Whether this terminal shows kitty graphics: kitty or Ghostty, run directly.
@@ -418,8 +443,10 @@ export const register: Register = on => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const t = await labels($)
-    const count = tally(list, t, t === STRINGS.es)
+    const count = tally(list, t)
     const label = tag(last, t)
+    // Unseen speaks in Signal Teal; once everything was opened the band goes quiet.
+    const waiting = isUnseen(last)
     const { path, title } = crumb(last, e.props.bodyColumns - BAND_CHROME - count.length - (label ? label.length + 3 : 0))
     const below = await next(e)
 
@@ -430,12 +457,12 @@ export const register: Register = on => {
           <Text> </Text>
           <Text color={ASH} backgroundColor={COLUMN} bold> basalt </Text>
           <Text> </Text>
-          <Text key="count" color={TEAL} bold>{count}</Text>
+          <Text key="count" color={waiting ? TEAL : MUTED} bold={waiting}>{count}</Text>
           <Text>  </Text>
-          <Text key="path" color={STONE}>{path}</Text>
-          <Text key="title" color={ASH} bold>{title} </Text>
-          {label ? <Text key="tag" color={last.kind === 'new' ? TEAL : MUTED}>· {label} </Text> : null}
-          <Button key="abrir" hotkey="o" variant="primary" label={t.open} onPress={() => openUrl($, last.url)} />
+          <Text key="path" color={waiting ? STONE : MUTED}>{path}</Text>
+          <Text key="title" color={waiting ? ASH : STONE} bold={waiting}>{title} </Text>
+          {label ? <Text key="tag" color={MUTED}>· {label} </Text> : null}
+          <Button key="abrir" hotkey="o" variant="primary" label={t.open} onPress={() => openUrl($, last.url, e.surface)} />
           <Text> </Text>
           <Button key="copiar" hotkey="c" label={t.copy} onPress={() => copyUrl($, last.url, e.surface)} />
           <Text> </Text>
@@ -463,11 +490,11 @@ export const register: Register = on => {
 
       return (
         <Box key={`r-${link.url}`} flexDirection="column" marginBottom={1}>
-          <Text color={ASH} bold wrap="truncate-middle">{link.title}</Text>
+          <Text color={isUnseen(link) ? ASH : STONE} bold={isUnseen(link)} wrap="truncate-middle">{isUnseen(link) ? '● ' : ''}{link.title}</Text>
           {link.trail.length > 0 && <Text color={MUTED} wrap="truncate-start">{path.replace(/ › $/, '')}</Text>}
           <Text color={TEAL} wrap="truncate-middle">{link.url}</Text>
           <Box>
-            <Button key={`o-${link.url}`} variant="primary" label={t.open} onPress={() => openUrl($, link.url)} />
+            <Button key={`o-${link.url}`} variant="primary" label={t.open} onPress={() => openUrl($, link.url, e.surface)} />
             <Text> </Text>
             <Button key={`c-${link.url}`} label={t.copy} onPress={() => copyUrl($, link.url, e.surface)} />
             <Text color={MUTED}> · {label ? `${label} · ` : ''}{link.by === 'subagent' || link.by === 'subagente' ? t.subagent : t.session}</Text>
@@ -475,16 +502,16 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const made = list.filter(link => link.kind === 'new')
-    const rest = list.filter(link => link.kind !== 'new')
-    const grouped = made.length > 0 && rest.length > 0
+    const unseen = list.filter(isUnseen)
+    const rest = list.filter(link => !isUnseen(link))
+    const grouped = unseen.length > 0 && rest.length > 0
 
     return (
       <Box flexDirection="column">
         {list.length === 0 && <Text color={MUTED}>{t.empty}</Text>}
-        {grouped && <Text key="h-new" color={TEAL} bold>{t.newGroup} · {made.length}</Text>}
-        {made.map(row)}
-        {grouped && <Text key="h-edited" color={MUTED} bold>{t.editedGroup} · {rest.length}</Text>}
+        {grouped && <Text key="h-unseen" color={TEAL} bold>{t.unseenGroup} · {unseen.length}</Text>}
+        {unseen.map(row)}
+        {grouped && <Text key="h-seen" color={MUTED} bold>{t.seenGroup} · {rest.length}</Text>}
         {rest.map(row)}
       </Box>
     )
