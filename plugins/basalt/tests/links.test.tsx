@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { isGitPush, isPublish, merge, normalizeSlug, ordered, publishFacts, pushDir, pushedDocs, pushedRanges, tally, tag, vaultName, withWorkspace } from '../hooks/register'
+import { isGitPush, isPublish, isUnseen, markSeen, merge, normalizeSlug, ordered, publishFacts, pushDir, pushedDocs, pushedRanges, tally, tag, vaultName, withWorkspace } from '../hooks/register'
 import type { PushIo } from '../hooks/register'
 
 const Box = 'Box' as any
@@ -176,14 +176,28 @@ describe('links band', () => {
     expect(merge({ ...first, kind: 'edited', version: 3 }, { ...first, at: 9, kind: 'edited', version: 4 }).version).toBe(4)
   })
 
-  test('the tag and the count read like a person would say them', () => {
-    const es = { new: 'nuevo', edited: 'editado' }
-    const l = (kind?: 'new' | 'edited', version?: number) => ({ url: A, title: 't', trail: [], by: 'session', at: 1, kind, version })
-    expect(tag(l('new', 1), es)).toBe('nuevo v1')
+  test('the tag says what the session did; the count says what waits to be opened', () => {
+    const es = { new: 'creado', edited: 'editado', unseen: 'sin abrir' }
+    const l = (kind?: 'new' | 'edited', version?: number, seenAt?: number) => ({ url: A, title: 't', trail: [], by: 'session', at: 1, kind, version, seenAt })
+    expect(tag(l('new', 1), es)).toBe('creado v1')
     expect(tag(l('edited', 3), es)).toBe('editado v3')
     expect(tag(l(), es)).toBe('')
-    expect(tally([l('new'), l('edited'), l('edited')], es, true)).toBe('1 nuevo · 2 editados')
-    expect(tally([l(), l()], es, true)).toBe('2 docs')
+    expect(tally([l('new'), l('edited', 2, 5), l('edited')], es)).toBe('● 2 sin abrir')
+    expect(tally([l('new', 1, 5), l(undefined, undefined, 5)], es)).toBe('2 docs')
+  })
+
+  test('opening a doc sees it; a later publish of it makes it unseen again', () => {
+    const row = { url: A, title: 'plan', trail: [], by: 'session', at: 1, kind: 'new' as const }
+    const [opened] = markSeen([row], A, 4)
+    expect(isUnseen(row)).toBe(true)
+    expect(isUnseen(opened!)).toBe(false)
+    expect(isUnseen(merge(opened!, { ...row, at: 9, kind: 'edited', version: 2 }))).toBe(true)
+  })
+
+  test('what waits to be opened comes before what was already seen, whatever its kind', () => {
+    const row = (title: string, at: number, kind: 'new' | 'edited', seenAt?: number) => ({ url: `${A}-${title}`, title, trail: [], by: 'session', at, kind, seenAt })
+    expect(ordered([row('created-seen', 5, 'new', 6), row('edited-unseen', 2, 'edited'), row('created-unseen', 1, 'new')]).map(l => l.title))
+      .toEqual(['created-unseen', 'edited-unseen', 'created-seen'])
   })
 
   test('the band shows the doc the session created, even when an edit came after', async ($, on) => {
@@ -191,21 +205,61 @@ describe('links band', () => {
     await $.tool.call({ tool: 'Bash', command: 'basalt publish ship-log/plan.md' } as any)
     await $.tool.call({ tool: 'Bash', command: 'basalt publish personas.md' } as any)
     const band = await drawn($, 'AbovePrompt')
-    expect(band).toContain('1 new · 1 edited')
+    expect(band).toContain('● 2 unseen')
     expect(band).toContain('plan')
-    expect(band).toContain('new v1')
+    expect(band).toContain('created v1')
     expect(band).not.toContain('personas')
   })
 
-  test('the pane lists the created docs first, under their own heading, each with its tag', async ($, on) => {
+  test('Open sees the doc: its «unseen» goes and the next unseen one takes the band', async ($, on) => {
+    sequence(on, [`new  notes/ship-log/plan  ${A}  v1`, `modified  notes/personas  ${B}  v7`])
+    on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+    on('ui.toast', () => ({ value: undefined }))
+    await $.tool.call({ tool: 'Bash', command: 'basalt publish ship-log/plan.md' } as any)
+    await $.tool.call({ tool: 'Bash', command: 'basalt publish personas.md' } as any)
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+    const props = { props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 160 } }
+    const ui: any = await $.ui.mount({ plugin: 'basalt', surface: 'terminal', component: 'AbovePrompt', ...props } as any)
+    await ui.press({ key: 'abrir' })
+    expect(textOf(await ui.drawn())).toContain('● 1 unseen')
+    expect(textOf(await ui.drawn())).toContain('personas')
+    await ui.press({ key: 'abrir' })
+    const after = textOf(await ui.drawn())
+    expect(after).toContain('2 docs')
+    expect(after).not.toContain('unseen')
+    await ui.unmount()
+  })
+
+  test('Open with no browser on the box copies the link instead of doing nothing', async ($, on) => {
+    engine(on)
+    const copied: string[] = []
+    on('process.run', () => ({ value: { exitCode: 3, stdout: '', stderr: '' } }))
+    on('ui.toast', () => ({ value: undefined }))
+    on('ui.copy', ($: any, e: any) => { copied.push(e.text); return { value: { isCopied: true } } })
+    await $.tool.call({ tool: 'Bash', command: 'basalt publish docs/panel.md' } as any)
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+    const ui: any = await $.ui.mount({ plugin: 'basalt', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: 160 } } as any)
+    await ui.press({ key: 'abrir' })
+    expect(copied).toEqual([URL])
+    await ui.unmount()
+  })
+
+  test('the pane lists what waits to be opened first, under its own heading, each with its tag', async ($, on) => {
     sequence(on, [`modified  notes/personas  ${B}  v7`, `new  notes/ship-log/plan  ${A}  v1`])
+    on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+    on('ui.toast', () => ({ value: undefined }))
     await $.tool.call({ tool: 'Bash', command: 'basalt publish personas.md' } as any)
     await $.tool.call({ tool: 'Bash', command: 'basalt publish ship-log/plan.md' } as any)
-    const pane = await drawn($, 'Pane')
-    expect(pane.indexOf('New · 1')).toBeLessThan(pane.indexOf('plan'))
-    expect(pane.indexOf('plan')).toBeLessThan(pane.indexOf('Edited · 1'))
-    expect(pane.indexOf('Edited · 1')).toBeLessThan(pane.indexOf('personas'))
+    await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+    const ui: any = await $.ui.mount({ plugin: 'basalt', surface: 'terminal', component: 'Pane', requestId: 'basalt-links', props: { bodyColumns: 80 } } as any)
+    await ui.press({ key: `o-${A}` })
+    const pane = textOf(await ui.drawn())
+    await ui.unmount()
+    expect(pane.indexOf('Unseen · 1')).toBeLessThan(pane.indexOf('personas'))
+    expect(pane.indexOf('personas')).toBeLessThan(pane.indexOf('Seen · 1'))
+    expect(pane.indexOf('Seen · 1')).toBeLessThan(pane.indexOf('plan'))
     expect(pane).toContain('edited v7')
+    expect(pane).toContain('created v1')
   })
 
 })
