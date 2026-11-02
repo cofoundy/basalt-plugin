@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { isGitPush, isPublish, isUnseen, markSeen, merge, normalizeSlug, ordered, publishFacts, pushDir, pushedDocs, pushedRanges, tally, tag, vaultName, withWorkspace } from '../hooks/register'
+import { isGitPush, isPrMerge, isPublish, isUnseen, markSeen, merge, mergedDocs, mergedPr, normalizeSlug, ordered, publishFacts, pushDir, pushedDocs, pushedRanges, tally, tag, vaultName, withWorkspace } from '../hooks/register'
 import type { PushIo } from '../hooks/register'
 
 const Box = 'Box' as any
@@ -27,7 +27,8 @@ const band = async ($: any) => {
 }
 
 // A repo at /r with a vault at /r/vault (name: notes) and, unless told, a workflow that runs `basalt publish`.
-const repo = ({ action = true, changed = 'A\tvault/research/Plan Q4.md\nM\tREADME.md\n' } = {}): PushIo => ({
+const repo = ({ action = true, changed = 'A\tvault/research/Plan Q4.md\nM\tREADME.md\n', pr = '' } = {}): PushIo => ({
+  gh: async (dir, args) => (args[0] === 'pr' && args[1] === 'view' && dir.startsWith('/r') && pr ? { exitCode: 0, stdout: pr } : { exitCode: 1, stdout: '' }),
   git: async (dir, args) => {
     const line = args.join(' ')
     if (line === 'rev-parse --show-toplevel') return { exitCode: dir.startsWith('/r') ? 0 : 128, stdout: '/r\n' }
@@ -108,6 +109,38 @@ describe('links band', () => {
     expect(await pushedDocs(repo(), '/elsewhere', PUSH_OUT)).toEqual([])
   })
 
+  test('a merged PR into main of a vault repo is the doc the Action publishes', async () => {
+    const pr = (o: object) => JSON.stringify({ baseRefName: 'main', mergedAt: '2026-11-02T20:00:00Z', files: [{ path: 'vault/research/Plan Q4.md', changeType: 'ADDED' }, { path: 'vault/personas.md', changeType: 'MODIFIED' }, { path: 'README.md', changeType: 'MODIFIED' }], ...o })
+    expect(await mergedDocs(repo({ pr: pr({}) }), '/r', '12')).toEqual([
+      { url: 'https://app.basalt.cofoundy.ai/notes/research/plan-q4', trail: ['notes', 'research'], title: 'plan-q4', kind: 'new' },
+      { url: 'https://app.basalt.cofoundy.ai/notes/personas', trail: ['notes'], title: 'personas', kind: 'edited' },
+    ])
+    expect(await mergedDocs(repo({ pr: pr({ mergedAt: null }) }), '/r', '12')).toEqual([])
+    expect(await mergedDocs(repo({ pr: pr({ baseRefName: 'staging' }) }), '/r', '12')).toEqual([])
+    expect(await mergedDocs(repo({ pr: pr({}), action: false }), '/r', '12')).toEqual([])
+  })
+
+  test('which gh pr merge, and which PR', () => {
+    expect(isPrMerge('cd /r && gh pr merge 12 --squash --delete-branch')).toBe(true)
+    expect(isPrMerge('gh pr merge 12 --auto --squash')).toBe(false)
+    expect(isPrMerge('gh pr view 12')).toBe(false)
+    expect(mergedPr('gh pr merge 12 --squash')).toBe('12')
+    expect(mergedPr('gh pr merge --squash -R acme/notes 34')).toBe('34')
+    expect(mergedPr('gh pr merge --squash && git pull')).toBeUndefined()
+  })
+
+  test('a --strict run that exits red still put its published docs in the band', async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    mock.env(on, {})
+    on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))
+    on('command.register', ($: any, e: any) => ({ value: { command: e.name } }))
+    on('ui.render', () => <Box key="engine" />)
+    on('tool.call', () => ({ isError: true, text: `✗ new        notes/ship-log/plan  ${A}  v1  [links: 1 broken]\nerror        notes/x  ✗ boom`, result: {} }))
+    await $.tool.call({ tool: 'Bash', command: 'basalt publish --strict ship-log' } as any)
+    expect(await drawn($, 'AbovePrompt')).toContain('plan')
+  })
+
   test('a flat link takes the workspace the band already knows for its space', () => {
     const flat = { url: 'https://app.basalt.cofoundy.ai/notes/research/plan-q4', trail: ['notes', 'research'], title: 'plan-q4', by: 'session', at: 1 }
     const seen = { url: 'https://app.basalt.cofoundy.ai/acme/notes/old', trail: ['notes'], title: 'old', by: 'session', at: 0 }
@@ -150,6 +183,12 @@ describe('links band', () => {
     expect(isPublish('mcp__plugin_basalt_basalt__publish_doc', undefined)).toBe(true)
     expect(isPublish('mcp__basalt__update_doc', undefined)).toBe(true)
     expect(isPublish('mcp__basalt__get_doc', undefined)).toBe(false)
+    expect(isPublish('Bash', 'npx -y basalt-cli@0.16.1 publish a.md')).toBe(true)
+    expect(isPublish('Bash', 'pnpm --dir cli exec basalt publish a.md')).toBe(true)
+    expect(isPublish('Bash', './node_modules/.bin/basalt publish a.md')).toBe(true)
+    expect(isPublish('Bash', 'basalt publish --dry-run a.md')).toBe(false)
+    expect(isPublish('mcp__plugin_basalt_basalt__edit_doc', undefined)).toBe(true)
+    expect(isPublish('mcp__plugin_basalt_basalt__move_doc', undefined)).toBe(true)
   })
   test('the CLI row says whether the doc was created or got a new version, and which', () => {
     const facts = publishFacts(`new            notes/ship-log/plan  ${A}  v1  [assets: 3↑ 0✓]\nmodified       notes/personas  ${B}  v7`)
