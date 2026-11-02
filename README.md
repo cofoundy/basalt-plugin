@@ -128,10 +128,13 @@ a silent hook is worthless if it's silently dead.
 
 Agents publish docs mid-conversation, and the URL scrolls away with the chat. The band
 above the prompt keeps the docs the session (or one of its subagents) published, and only
-those: the link a `basalt publish`/`basalt move` or an MCP `publish_doc`/`update_doc`
-returns, and the docs a `git push` to `main` hands to a vault's publish Action (each
-`.md`/`.mdx` the push changed under a `vault.yaml`, in a repo whose workflows run
-`basalt publish`). A link the session merely read — in code, a log, an old transcript —
+those: the link a `basalt publish`/`basalt move` returns (however it is run: `npx -y
+basalt-cli@…`, `pnpm exec`, a path to the binary; a `--strict` run that exits red still
+counts the docs it put up), the MCP tools that leave a doc at a new URL or version
+(`publish_doc`, `update_doc`, `edit_doc`, `move_doc`, `restore_version`, `publish_space`,
+`publish_vault`), and the docs a `git push` to `main` or a `gh pr merge` into it hands to a
+vault's publish Action (each `.md`/`.mdx` it changed under a `vault.yaml`, in a repo whose
+workflows run `basalt publish`). A link the session merely read — in code, a log, an old transcript —
 never lands there. A pushed doc gets its `/{space}/{slug}` URL, which the app redirects
 to the canonical one; when the band already holds a doc of that space, it uses that
 workspace directly.

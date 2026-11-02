@@ -36,19 +36,46 @@ export const commandText = (command: string): string =>
     .replace(/<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1[^\n]*\n[\s\S]*?(?:\n[ \t]*\2[ \t]*(?=\n|$)|$)/g, ' ')
     .replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''")
 
-// `basalt …` at the head of a shell segment, after any `VAR=value` and an npx/pnpm/bunx runner.
-const AT_HEAD = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*(?:(?:npx|bunx|pnpm\s+(?:exec\s+|dlx\s+)?)\s*)?`
-const BASALT_PUBLISH = new RegExp(AT_HEAD + String.raw`basalt(?:-cli)?\s+(?:publish|move)\b`)
+// A command at the head of a shell segment, after any `VAR=value`.
+const AT_HEAD = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*`
+// An npx/bunx/pnpm/yarn runner with its flags (`npx -y`, `pnpm --dir cli exec`), then the
+// binary by name or path (`./node_modules/.bin/basalt`), pinned or not (`basalt-cli@0.16.1`).
+const RUNNER = String.raw`(?:(?:npx|bunx|yarn|pnpm)(?:\s+(?:exec|dlx|-[\w-]+(?:[= ](?!\S*basalt)[^\s-]\S*)?))*\s+)?`
+const BASALT_PUBLISH = new RegExp(AT_HEAD + RUNNER + String.raw`(?:\S*/)?basalt(?:-cli)?(?:@\S+)?\s+(?:publish|move)\b`)
 const GIT_PUSH = new RegExp(AT_HEAD + String.raw`git(?:\s+-C\s+\S+)?\s+push\b`)
+const GH_MERGE = new RegExp(AT_HEAD + String.raw`gh\s+pr\s+merge\b`)
 
-// The calls that publish: `basalt publish|move` from a shell, `publish_doc|update_doc` over MCP.
+// The MCP tools that leave a doc at a new URL or version.
+const MCP_PUBLISH = /__(publish_doc|update_doc|edit_doc|move_doc|restore_version|publish_space|publish_vault)$/
+
+// The calls that publish: `basalt publish|move` from a shell (a `--dry-run` publishes
+// nothing), and the MCP tools above.
 export const isPublish = (tool: string, command: unknown): boolean =>
   tool === 'Bash'
-    ? typeof command === 'string' && BASALT_PUBLISH.test(commandText(command))
-    : /basalt/i.test(tool) && /__(publish_doc|update_doc)$/.test(tool)
+    ? typeof command === 'string' && BASALT_PUBLISH.test(commandText(command)) && !/\s--dry-run\b/.test(commandText(command))
+    : /basalt/i.test(tool) && MCP_PUBLISH.test(tool)
 
 export const isGitPush = (command: unknown): boolean =>
   typeof command === 'string' && GIT_PUSH.test(commandText(command))
+
+// `gh pr merge` now (`--auto` merges later, when nobody is watching the call).
+export const isPrMerge = (command: unknown): boolean =>
+  typeof command === 'string' && GH_MERGE.test(commandText(command)) && !/\s--auto\b/.test(commandText(command))
+
+// The PR a `gh pr merge` names: its number, URL or branch; none means the current branch's.
+export const mergedPr = (command: string): string | undefined => {
+  const text = commandText(command)
+  const at = text.match(GH_MERGE)
+  const rest = at?.index === undefined ? '' : text.slice(at.index + at[0].length)
+  const args = (rest.split(/[;&|\n]/)[0] ?? '').trim().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? ''
+    if (/^-(R|-repo|t|-subject|b|-body|F|-body-file|A|-author-email|-match-head-commit)$/.test(arg)) i++
+    else if (!arg.startsWith('-')) return arg
+  }
+
+  return undefined
+}
 
 // What a publish said about each URL it printed: created or a new version, and which one.
 // The CLI prints one row per doc — `new  space/slug  <url>  v1` — and `--json` / MCP return
@@ -108,11 +135,11 @@ export const pushedRanges = (output: string): { from: string; to: string }[] =>
     .filter(m => m[3] === 'main' || m[3] === 'master')
     .map(m => ({ from: m[1] ?? '', to: m[2] ?? '' }))
 
-// The directory the push ran in: `git -C <dir> push`, else the last `cd <dir>` before it,
-// else the session's own (relative paths against it).
-export const pushDir = (command: string, cwd: string, home = ''): string => {
+// The directory the push (or merge) ran in: `git -C <dir> push`, else the last `cd <dir>`
+// before it, else the session's own (relative paths against it).
+export const pushDir = (command: string, cwd: string, home = '', at = GIT_PUSH): string => {
   const text = commandText(command)
-  const push = text.match(GIT_PUSH)
+  const push = text.match(at)
   const head = push?.index === undefined ? text : text.slice(0, push.index + push[0].length)
   const dashC = head.match(/git\s+-C\s+(\S+)\s+push\s*$/)
   const cds = [...head.matchAll(/(?:^|[;&|(\n])\s*cd\s+([^\s;&|)]+)/g)]
@@ -137,52 +164,86 @@ export const vaultName = (yaml: string): string | undefined =>
 
 const BASE = 'https://app.basalt.cofoundy.ai'
 
-// What reading a push needs from outside: git in a directory, a file's text.
+// What reading a push or a merge needs from outside: git and gh in a directory, a file's text.
 export type PushIo = {
   git: (dir: string, args: string[]) => Promise<{ exitCode: number; stdout: string }>
+  gh: (dir: string, args: string[]) => Promise<{ exitCode: number; stdout: string }>
   read: (path: string) => Promise<string | undefined>
 }
 
-// The docs a push to main hands to the vault's publish Action: each .md/.mdx it added or
-// changed under a vault.yaml, in a repo whose workflows run `basalt publish`. The URL is
-// the flat /{space}/{slug} one: the app sends whoever may read it to the canonical URL,
-// and the workspace is not knowable from the repo.
-export async function pushedDocs(io: PushIo, dir: string, output: string): Promise<{ url: string; trail: string[]; title: string; kind: 'new' | 'edited' }[]> {
-  const ranges = pushedRanges(output)
-  if (ranges.length === 0) return []
-  const top = await io.git(dir, ['rev-parse', '--show-toplevel'])
-  if (top.exitCode !== 0) return []
-  const root = top.stdout.trim()
-  const docs: { url: string; trail: string[]; title: string; kind: 'new' | 'edited' }[] = []
-  for (const { from, to } of ranges) {
-    const action = await io.git(root, ['grep', '-l', '-e', 'basalt publish', to, '--', '.github/workflows'])
-    if (action.exitCode !== 0) continue
-    // `A` is a doc the push created; `M`/`R` a new version of one that existed.
-    const changed = await io.git(root, ['diff', '--name-status', '--diff-filter=AMR', `${from}..${to}`, '--', '*.md', '*.mdx'])
-    for (const row of changed.stdout.split('\n').filter(Boolean)) {
-      const cols = row.split('\t')
-      const kind = cols[0]?.startsWith('A') ? 'new' : 'edited'
-      const file = cols[cols.length - 1] ?? ''
-      const parts = file.split('/')
-      for (let depth = parts.length - 1; depth >= 0; depth--) {
-        const yaml = await io.read([root, ...parts.slice(0, depth), 'vault.yaml'].join('/'))
-        if (yaml === undefined) continue
-        const space = vaultName(yaml) ?? segment(parts[depth - 1] ?? root.split('/').pop() ?? '')
-        const slug = normalizeSlug(parts.slice(depth).join('/'))
-        if (space && slug) {
-          const path = slug.split('/')
-          docs.push({ url: `${BASE}/${space}/${slug}`, trail: [space, ...path.slice(0, -1)], title: path[path.length - 1] ?? slug, kind })
-        }
-        break
+type PushedDoc = { url: string; trail: string[]; title: string; kind: 'new' | 'edited' }
+
+// Each .md/.mdx under a vault.yaml, as the doc the vault's publish Action makes of it. The
+// URL is the flat /{space}/{slug} one: the app sends whoever may read it to the canonical
+// URL, and the workspace is not knowable from the repo.
+async function vaultDocs(io: PushIo, root: string, files: { path: string; kind: PushedDoc['kind'] }[]): Promise<PushedDoc[]> {
+  const docs: PushedDoc[] = []
+  for (const { path: file, kind } of files) {
+    if (!/\.mdx?$/i.test(file)) continue
+    const parts = file.split('/')
+    for (let depth = parts.length - 1; depth >= 0; depth--) {
+      const yaml = await io.read([root, ...parts.slice(0, depth), 'vault.yaml'].join('/'))
+      if (yaml === undefined) continue
+      const space = vaultName(yaml) ?? segment(parts[depth - 1] ?? root.split('/').pop() ?? '')
+      const slug = normalizeSlug(parts.slice(depth).join('/'))
+      if (space && slug) {
+        const path = slug.split('/')
+        docs.push({ url: `${BASE}/${space}/${slug}`, trail: [space, ...path.slice(0, -1)], title: path[path.length - 1] ?? slug, kind })
       }
+      break
     }
   }
 
   return docs
 }
 
+// The docs a push to main hands to the vault's publish Action: each .md/.mdx it added or
+// changed under a vault.yaml, in a repo whose workflows run `basalt publish`.
+export async function pushedDocs(io: PushIo, dir: string, output: string): Promise<PushedDoc[]> {
+  const ranges = pushedRanges(output)
+  if (ranges.length === 0) return []
+  const top = await io.git(dir, ['rev-parse', '--show-toplevel'])
+  if (top.exitCode !== 0) return []
+  const root = top.stdout.trim()
+  const docs: PushedDoc[] = []
+  for (const { from, to } of ranges) {
+    const action = await io.git(root, ['grep', '-l', '-e', 'basalt publish', to, '--', '.github/workflows'])
+    if (action.exitCode !== 0) continue
+    // `A` is a doc the push created; `M`/`R` a new version of one that existed.
+    const changed = await io.git(root, ['diff', '--name-status', '--diff-filter=AMR', `${from}..${to}`, '--', '*.md', '*.mdx'])
+    const files = changed.stdout.split('\n').filter(Boolean).map(row => {
+      const cols = row.split('\t')
+      return { path: cols[cols.length - 1] ?? '', kind: cols[0]?.startsWith('A') ? 'new' as const : 'edited' as const }
+    })
+    docs.push(...(await vaultDocs(io, root, files)))
+  }
+
+  return docs
+}
+
+// The docs a merged PR hands to the same Action: a `gh pr merge` into main of a vault repo
+// (the PR road never runs a `git push` to main in the session).
+export async function mergedDocs(io: PushIo, dir: string, pr: string | undefined): Promise<PushedDoc[]> {
+  const view = await io.gh(dir, ['pr', 'view', ...(pr ? [pr] : []), '--json', 'files,baseRefName,mergedAt'])
+  if (view.exitCode !== 0) return []
+  let info: { files?: { path: string; changeType: string }[]; baseRefName?: string; mergedAt?: string | null }
+  try { info = JSON.parse(view.stdout) } catch { return [] }
+  if (!info.mergedAt || !['main', 'master'].includes(info.baseRefName ?? '')) return []
+  const top = await io.git(dir, ['rev-parse', '--show-toplevel'])
+  if (top.exitCode !== 0) return []
+  const root = top.stdout.trim()
+  const action = await io.git(root, ['grep', '-l', '-e', 'basalt publish', 'HEAD', '--', '.github/workflows'])
+  if (action.exitCode !== 0) return []
+  const files = (info.files ?? [])
+    .filter(f => ['ADDED', 'MODIFIED', 'RENAMED'].includes(f.changeType))
+    .map(f => ({ path: f.path, kind: f.changeType === 'ADDED' ? 'new' as const : 'edited' as const }))
+
+  return vaultDocs(io, root, files)
+}
+
 const pushIo = ($: EngineInterface): PushIo => ({
   git: (dir, args) => $.process.run(['git', '-C', dir, ...args]).catch(() => ({ exitCode: 1, stdout: '' })),
+  gh: (dir, args) => $.process.run(['gh', ...args], { cwd: dir }).catch(() => ({ exitCode: 1, stdout: '' })),
   read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : undefined), () => undefined),
 })
 
@@ -403,11 +464,16 @@ export const register: Register = on => {
   // docs a push to main hands to the vault's publish Action (no URL ever reaches the session).
   on('tool.call', async ($, e, next) => {
     const out = await next(e)
-    if (out.deny !== undefined || out.isError) return out
+    if (out.deny !== undefined) return out
     const command = (e as { command?: unknown }).command
     const publish = isPublish(e.tool, command)
     const push = e.tool === 'Bash' && !publish && isGitPush(command)
-    if (!publish && !push) return out
+    const prMerge = e.tool === 'Bash' && !publish && !push && isPrMerge(command)
+    // A CLI run that exits non-zero may still have published: `--strict` fails the run over a
+    // broken link AFTER the doc went up, and a failed row prints no URL. Anything else that
+    // errored published nothing.
+    if (out.isError && !(publish && e.tool === 'Bash')) return out
+    if (!publish && !push && !prMerge) return out
     const text = strings([out.text, out.result]).join('\n')
     const found: BasaltLink[] = []
     const by = e.agentId ? 'subagent' : 'session'
@@ -415,8 +481,10 @@ export const register: Register = on => {
     if (publish) {
       for (const [url, fact] of publishFacts(text)) found.push({ ...toLink(url, by, now), ...fact })
     } else {
-      const dir = pushDir(command as string, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
-      for (const doc of await pushedDocs(pushIo($), dir, text).catch(() => [])) found.push({ ...doc, by, at: now })
+      const at = push ? GIT_PUSH : GH_MERGE
+      const dir = pushDir(command as string, await $.session.cwd(), (await $.env.get('HOME')) ?? '', at)
+      const docs = push ? pushedDocs(pushIo($), dir, text) : mergedDocs(pushIo($), dir, mergedPr(command as string))
+      for (const doc of await docs.catch(() => [])) found.push({ ...doc, by, at: now })
     }
     if (found.length > 0) {
       // One doc, one row: a flat /{space}/{slug} and its canonical /{ws}/{space}/{slug} are the same doc.
